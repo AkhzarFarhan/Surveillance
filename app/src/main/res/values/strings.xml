@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Surveillance</string>
+    <string name="cctv_service_name">Imou CCTV YouTube Streamer</string>
+    <string name="cctv_channel_desc">24/7 CCTV background streaming and SD card sync status</string>
+</resources>
