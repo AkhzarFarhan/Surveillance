@@ -70,6 +70,15 @@ class YouTubeAuthManager(
             } else {
                 Result.failure(Exception("Google Sign-In returned null account"))
             }
+        } catch (e: ApiException) {
+            val friendlyMsg = when (e.statusCode) {
+                10 -> "Google Sign-In Error 10 (DEVELOPER_ERROR): Package 'com.imou.youtubestreamer' with SHA-1 '48:F8:49:4B:0C:22:A4:D9:D8:44:9F:CB:AC:CE:E5:77:30:96:9E:E8' is not registered in Google Cloud Console OAuth 2.0 Client IDs. Please add it at console.cloud.google.com, or use Stream Key mode below."
+                12500 -> "Google Sign-In Error 12500: Check Google Play Services or OAuth Consent Screen in Google Cloud Console."
+                7 -> "Google Sign-In Error 7: Network error. Please check your internet connection."
+                else -> "Google Sign-In failed (Code ${e.statusCode}): ${e.message}"
+            }
+            AppLogger.e("YouTubeAuth", friendlyMsg)
+            Result.failure(Exception(friendlyMsg, e))
         } catch (e: Exception) {
             AppLogger.e("YouTubeAuth", "Google Sign-In failed: ${e.message}")
             Result.failure(e)
@@ -110,9 +119,9 @@ class YouTubeAuthManager(
         try {
             // Check if fallback to manual persistent RTMP is preferred
             if (!settings.useAutoBroadcast || !isUserSignedIn()) {
-                val manualRtmp = if (lensCode == "F") settings.manualRtmpFixed else settings.manualRtmpRotatable
+                val manualRtmp = if (lensCode == "F") settings.getFormattedFixedRtmp() else settings.getFormattedRotatableRtmp()
                 if (manualRtmp.isNotBlank()) {
-                    AppLogger.i("YouTubeAuth", "Using configured persistent RTMP endpoint for $title")
+                    AppLogger.i("YouTubeAuth", "Using persistent RTMP endpoint for $title: $manualRtmp")
                     return@withContext Result.success(
                         BroadcastSessionInfo(
                             broadcastId = "persistent_${lensCode}",

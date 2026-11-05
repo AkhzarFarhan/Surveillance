@@ -85,6 +85,29 @@ class AppSettings(context: Context) {
         get() = prefs.getString(KEY_MANUAL_RTMP_ROTATABLE, "") ?: ""
         set(value) = prefs.edit().putString(KEY_MANUAL_RTMP_ROTATABLE, value.trim()).apply()
 
+    fun getFormattedFixedRtmp(): String {
+        val target = manualRtmpFixed.trim()
+        if (target.isBlank()) return ""
+        return if (target.startsWith("rtmp://") || target.startsWith("rtmps://")) {
+            target
+        } else {
+            "rtmps://a.rtmp.youtube.com/live2/$target"
+        }
+    }
+
+    fun getFormattedRotatableRtmp(): String {
+        val target = manualRtmpRotatable.trim()
+        if (target.isNotBlank()) {
+            return if (target.startsWith("rtmp://") || target.startsWith("rtmps://")) {
+                target
+            } else {
+                "rtmps://a.rtmp.youtube.com/live2/$target"
+            }
+        }
+        // Fallback to Fixed RTMP if only one stream key is supplied
+        return getFormattedFixedRtmp()
+    }
+
     var homeWifiSsid: String
         get() = prefs.getString(KEY_HOME_WIFI_SSID, "") ?: ""
         set(value) = prefs.edit().putString(KEY_HOME_WIFI_SSID, value.trim()).apply()

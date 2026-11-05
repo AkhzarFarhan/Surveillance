@@ -43,6 +43,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _userEmail = MutableStateFlow(settings.signedInEmail)
     val userEmail: StateFlow<String> = _userEmail.asStateFlow()
 
+    private val _authError = MutableStateFlow<String?>(null)
+    val authError: StateFlow<String?> = _authError.asStateFlow()
+
+    fun dismissAuthError() {
+        _authError.value = null
+    }
+
+    fun saveStreamKey(key: String) {
+        settings.manualRtmpFixed = key.trim()
+        settings.manualRtmpRotatable = key.trim()
+        settings.useAutoBroadcast = false
+        _authError.value = null
+        AppLogger.i("Settings", "Custom YouTube Stream Key configured successfully.")
+    }
+
     fun toggleStreaming() {
         val app = getApplication<Application>()
         if (CctvStreamingService.isRunning) {
@@ -57,6 +72,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (result.isSuccess) {
             _isSignedIn.value = true
             _userEmail.value = settings.signedInEmail
+            _authError.value = null
+        } else {
+            _authError.value = result.exceptionOrNull()?.message
         }
     }
 

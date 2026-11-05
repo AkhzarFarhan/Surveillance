@@ -40,11 +40,15 @@ fun DashboardScreen(
     val systemState by viewModel.systemState.collectAsState()
     val isSignedIn by viewModel.isSignedIn.collectAsState()
     val userEmail by viewModel.userEmail.collectAsState()
+    val authError by viewModel.authError.collectAsState()
+    val settings = viewModel.settings
 
     val isIgnoringBatteryOptimizations = remember {
         val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
         powerManager.isIgnoringBatteryOptimizations(context.packageName)
     }
+
+    var showStreamKeyDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -92,6 +96,114 @@ fun DashboardScreen(
             }
         }
 
+        // Google Sign-In Error 10 Guidance Banner
+        if (authError != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF2E1717)),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DangerRed)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = DangerRed)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Google Sign-In Configuration Required",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = DangerRed,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        IconButton(onClick = { viewModel.dismissAuthError() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = TextMuted)
+                        }
+                    }
+
+                    Text(
+                        text = "Google Play Services requires adding your package name and SHA-1 certificate to your Google Cloud Console OAuth 2.0 Client IDs:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DarkBg)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("Package: com.imou.youtubestreamer", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "SHA-1: 48:F8:49:4B:0C:22:A4:D9:D8:44:9F:CB:AC:CE:E5:77:30:96:9E:E8",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = LiveCyan,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = {
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SHA1", "48:F8:49:4B:0C:22:A4:D9:D8:44:9F:CB:AC:CE:E5:77:30:96:9E:E8"))
+                                android.widget.Toast.makeText(context, "SHA-1 copied to clipboard!", android.widget.Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy SHA-1", tint = LiveCyan)
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = DarkBorder)
+
+                    Text(
+                        text = "Or enter your YouTube Stream Key directly to stream immediately without Google Cloud Console:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+
+                    var inlineKey by remember { mutableStateOf("") }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = inlineKey,
+                            onValueChange = { inlineKey = it },
+                            placeholder = { Text("Paste YouTube Stream Key here...") },
+                            modifier = Modifier.weight(1f),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = SurveillanceGreen,
+                                unfocusedBorderColor = DarkBorder
+                            ),
+                            singleLine = true
+                        )
+                        Button(
+                            onClick = {
+                                if (inlineKey.isNotBlank()) {
+                                    viewModel.saveStreamKey(inlineKey)
+                                    android.widget.Toast.makeText(context, "Stream Key saved! Ready to stream.", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Save Key", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // Master Pipeline Status Card
         PipelineStatusCard(systemState = systemState)
 
@@ -99,9 +211,56 @@ fun DashboardScreen(
         YouTubeAuthCard(
             isSignedIn = isSignedIn,
             userEmail = userEmail,
+            hasStreamKey = settings.manualRtmpFixed.isNotBlank(),
+            manualRtmpFixed = settings.manualRtmpFixed,
             onSignInClick = onLaunchSignIn,
-            onSignOutClick = { viewModel.signOutGoogle() }
+            onSignOutClick = { viewModel.signOutGoogle() },
+            onEnterStreamKeyClick = { showStreamKeyDialog = true }
         )
+
+        // Stream Key Dialog
+        if (showStreamKeyDialog) {
+            var inputKey by remember { mutableStateOf(settings.manualRtmpFixed) }
+            AlertDialog(
+                onDismissRequest = { showStreamKeyDialog = false },
+                title = { Text("Configure YouTube Stream Key") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Get your Stream Key from YouTube Studio > Go Live. The app will stream directly to rtmps://a.rtmp.youtube.com/live2/",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        OutlinedTextField(
+                            value = inputKey,
+                            onValueChange = { inputKey = it },
+                            label = { Text("Stream Key or RTMP URL") },
+                            placeholder = { Text("xxxx-xxxx-xxxx-xxxx") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.saveStreamKey(inputKey)
+                            showStreamKeyDialog = false
+                            android.widget.Toast.makeText(context, "Stream key saved!", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg)
+                    ) {
+                        Text("Save & Apply")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showStreamKeyDialog = false }) {
+                        Text("Cancel", color = TextMuted)
+                    }
+                },
+                containerColor = DarkSurface
+            )
+        }
 
         // Dual Camera Cards: Fixed & Rotatable
         Text(
@@ -409,55 +568,79 @@ fun MetricColumn(label: String, value: String) {
 fun YouTubeAuthCard(
     isSignedIn: Boolean,
     userEmail: String,
+    hasStreamKey: Boolean,
+    manualRtmpFixed: String,
     onSignInClick: () -> Unit,
-    onSignOutClick: () -> Unit
+    onSignOutClick: () -> Unit,
+    onEnterStreamKeyClick: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                Icon(
-                    Icons.Default.AccountCircle,
-                    contentDescription = null,
-                    tint = if (isSignedIn) SurveillanceGreen else TextMuted,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = if (isSignedIn) "Connected to YouTube" else "YouTube Not Connected",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Icon(
+                        Icons.Default.AccountCircle,
+                        contentDescription = null,
+                        tint = if (isSignedIn || hasStreamKey) SurveillanceGreen else TextMuted,
+                        modifier = Modifier.size(28.dp)
                     )
-                    Text(
-                        text = if (isSignedIn) userEmail else "Tap to connect Google Account",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        val headerText = when {
+                            isSignedIn -> "Connected to YouTube"
+                            hasStreamKey -> "YouTube Stream Key Active"
+                            else -> "YouTube Not Connected"
+                        }
+                        val subText = when {
+                            isSignedIn -> userEmail
+                            hasStreamKey -> "Key: ${manualRtmpFixed.take(16)}... (Ready)"
+                            else -> "Sign in or enter a Stream Key"
+                        }
+                        Text(
+                            text = headerText,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = subText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
                 }
-            }
 
-            if (isSignedIn) {
-                TextButton(onClick = onSignOutClick) {
-                    Text("Disconnect", color = TextMuted, style = MaterialTheme.typography.labelSmall)
-                }
-            } else {
-                Button(
-                    onClick = onSignInClick,
-                    colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("1-Tap Sign-In", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                if (isSignedIn) {
+                    TextButton(onClick = onSignOutClick) {
+                        Text("Disconnect", color = TextMuted, style = MaterialTheme.typography.labelSmall)
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(
+                            onClick = onEnterStreamKeyClick,
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(if (hasStreamKey) "Edit Key" else "Stream Key", fontSize = 12.sp, color = LiveCyan)
+                        }
+
+                        Button(
+                            onClick = onSignInClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("1-Tap Sign-In", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
         }

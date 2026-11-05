@@ -124,13 +124,12 @@ class CctvStreamingService : LifecycleService() {
             updateNotification("Authenticating...", "Checking YouTube credentials...")
 
             // Check if user is authenticated or using manual stream keys
-            if (settings.useAutoBroadcast && !authManager.isUserSignedIn()) {
-                if (settings.manualRtmpFixed.isBlank() && settings.manualRtmpRotatable.isBlank()) {
-                    _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
-                    updateNotification("Auth Required", "Please sign in to Google in the app.")
-                    AppLogger.w("CctvService", "YouTube authentication required. Awaiting sign-in.")
-                    return@launch
-                }
+            val hasManualKey = settings.getFormattedFixedRtmp().isNotBlank() || settings.getFormattedRotatableRtmp().isNotBlank()
+            if (!authManager.isUserSignedIn() && !hasManualKey) {
+                _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
+                updateNotification("Auth Required", "Sign in with Google or enter YouTube Stream Key.")
+                AppLogger.w("CctvService", "YouTube authentication required. Sign in with Google or enter Stream Key.")
+                return@launch
             }
 
             _systemState.value = _systemState.value.copy(status = PipelineStatus.STREAMING)
@@ -172,8 +171,8 @@ class CctvStreamingService : LifecycleService() {
         currentFixedBroadcastId = fixedInfo?.broadcastId ?: ""
         currentRotatableBroadcastId = rotatableInfo?.broadcastId ?: ""
 
-        currentFixedRtmp = fixedInfo?.rtmpIngestionEndpoint ?: settings.manualRtmpFixed
-        currentRotatableRtmp = rotatableInfo?.rtmpIngestionEndpoint ?: settings.manualRtmpRotatable
+        currentFixedRtmp = fixedInfo?.rtmpIngestionEndpoint ?: settings.getFormattedFixedRtmp()
+        currentRotatableRtmp = rotatableInfo?.rtmpIngestionEndpoint ?: settings.getFormattedRotatableRtmp()
 
         // 2. Start Dual Streaming Workers
         streamOrchestrator.startDualStreaming(
