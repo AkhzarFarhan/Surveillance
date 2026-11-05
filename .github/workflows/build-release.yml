@@ -1,0 +1,112 @@
+name: Build & Publish Surveillance Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version Name (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+      release_notes:
+        description: 'Release Notes (optional)'
+        required: false
+        default: 'Initial release of Surveillance Android App for Imou CCTV automated YouTube private streaming and archival.'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+          gradle-home-cache-cleanup: true
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x ./gradlew
+
+      - name: Determine Version Name & Code
+        id: versioning
+        run: |
+          VERSION_CODE=$(git rev-list --count HEAD)
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "VERSION_CODE: $VERSION_CODE"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION_NAME="${{ github.event.inputs.version_name }}"
+          elif [[ "${{ github.ref }}" =~ refs/tags/v.* ]]; then
+            VERSION_NAME="${GITHUB_REF_NAME#v}"
+          else
+            VERSION_NAME="1.0.${VERSION_CODE}"
+          fi
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "TAG_NAME=v$VERSION_NAME" >> $GITHUB_ENV
+          echo "VERSION_NAME: $VERSION_NAME"
+          echo "TAG_NAME: v$VERSION_NAME"
+
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug --no-daemon --parallel --build-cache
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p release-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk release-artifacts/Surveillance-v${{ env.VERSION_NAME }}.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-artifacts/Surveillance-debug.apk
+
+          cat <<EOF > release-artifacts/surveillance-version.json
+          {
+            "versionCode": ${{ env.VERSION_CODE }},
+            "versionName": "${{ env.VERSION_NAME }}",
+            "appName": "Surveillance"
+          }
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "Surveillance ${{ env.TAG_NAME }}"
+          body: |
+            ## Surveillance Android Application Release ${{ env.TAG_NAME }}
+
+            Automated 24/7 Private YouTube Live Streaming & Archival for Imou Life Dual-Lens CCTV Cameras.
+
+            ### Features:
+            - **MicroSD Card Offline Backlog Catch-Up**: Streams missed footage at 3.0x speed over Dahua RTSP playback when home Wi-Fi reconnects.
+            - **8-Hour Session Rotation**: Guarantees YouTube's 12-hour live limit is never breached, producing exactly 3 permanent private daily VOD replays.
+            - **Automated Naming**: `DD-MM-YYYY Part <X> of 3_F` (Fixed Lens) and `_R` (Rotatable Lens).
+            - **1-Tap Google Sign-In**: Instant YouTube channel connection and OAuth2 credential caching.
+            - **Content ID Protection**: Injects synthetic silent stereo audio (`anullsrc`) with zero CPU overhead.
+            - **Unkillable 24/7 Background Service**: Foreground service with WakeLock, WifiLock, and BootReceiver.
+
+            ${{ github.event.inputs.release_notes }}
+          files: |
+            release-artifacts/Surveillance-v${{ env.VERSION_NAME }}.apk
+            release-artifacts/Surveillance-debug.apk
+            release-artifacts/surveillance-version.json
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
