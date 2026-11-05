@@ -97,15 +97,12 @@ class AppSettings(context: Context) {
 
     fun getFormattedRotatableRtmp(): String {
         val target = manualRtmpRotatable.trim()
-        if (target.isNotBlank()) {
-            return if (target.startsWith("rtmp://") || target.startsWith("rtmps://")) {
-                target
-            } else {
-                "rtmps://a.rtmp.youtube.com/live2/$target"
-            }
+        if (target.isBlank()) return ""
+        return if (target.startsWith("rtmp://") || target.startsWith("rtmps://")) {
+            target
+        } else {
+            "rtmps://a.rtmp.youtube.com/live2/$target"
         }
-        // Fallback to Fixed RTMP if only one stream key is supplied
-        return getFormattedFixedRtmp()
     }
 
     var homeWifiSsid: String

@@ -220,22 +220,32 @@ fun DashboardScreen(
 
         // Stream Key Dialog
         if (showStreamKeyDialog) {
-            var inputKey by remember { mutableStateOf(settings.manualRtmpFixed) }
+            var inputFixedKey by remember { mutableStateOf(settings.manualRtmpFixed) }
+            var inputRotatableKey by remember { mutableStateOf(settings.manualRtmpRotatable) }
+
             AlertDialog(
                 onDismissRequest = { showStreamKeyDialog = false },
                 title = { Text("Configure YouTube Stream Key") },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            "Get your Stream Key from YouTube Studio > Go Live. The app will stream directly to rtmps://a.rtmp.youtube.com/live2/",
+                            "Get your Stream Key from YouTube Studio (studio.youtube.com/channel/live). You do NOT need to sign in to Google in this mode.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
                         OutlinedTextField(
-                            value = inputKey,
-                            onValueChange = { inputKey = it },
-                            label = { Text("Stream Key or RTMP URL") },
-                            placeholder = { Text("xxxx-xxxx-xxxx-xxxx") },
+                            value = inputFixedKey,
+                            onValueChange = { inputFixedKey = it },
+                            label = { Text("Fixed Lens Stream Key (_F)") },
+                            placeholder = { Text("e.g. xxxx-xxxx-xxxx-xxxx") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = inputRotatableKey,
+                            onValueChange = { inputRotatableKey = it },
+                            label = { Text("Rotatable Lens Key (_R) - Optional") },
+                            placeholder = { Text("Leave blank to stream Fixed lens only") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
@@ -244,9 +254,12 @@ fun DashboardScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            viewModel.saveStreamKey(inputKey)
+                            settings.manualRtmpFixed = inputFixedKey.trim()
+                            settings.manualRtmpRotatable = inputRotatableKey.trim()
+                            settings.useAutoBroadcast = false
+                            viewModel.dismissAuthError()
                             showStreamKeyDialog = false
-                            android.widget.Toast.makeText(context, "Stream key saved!", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, "Stream key(s) saved! Ready to stream.", android.widget.Toast.LENGTH_SHORT).show()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg)
                     ) {
