@@ -288,7 +288,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
 
         Text(
-            text = "YOUTUBE BROADCAST CONFIGURATION",
+            text = "YOUTUBE STREAM SETTINGS",
             style = MaterialTheme.typography.labelSmall,
             color = TextMuted,
             letterSpacing = 1.sp
@@ -301,6 +301,52 @@ fun SettingsScreen(viewModel: MainViewModel) {
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(
+                    text = "YouTube Stream Key (No Google Login Required)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = LiveCyan,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Copy your Stream Key from YouTube Studio (studio.youtube.com/channel/live) and paste it below. The app will stream directly without needing Google Cloud or OAuth.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+
+                OutlinedTextField(
+                    value = manualRtmpFixed,
+                    onValueChange = {
+                        manualRtmpFixed = it
+                        settings.manualRtmpFixed = it
+                    },
+                    label = { Text("Fixed Lens Stream Key (_F)") },
+                    placeholder = { Text("e.g. xxxx-xxxx-xxxx-xxxx") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SurveillanceGreen,
+                        unfocusedBorderColor = DarkBorder
+                    ),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = manualRtmpRotatable,
+                    onValueChange = {
+                        manualRtmpRotatable = it
+                        settings.manualRtmpRotatable = it
+                    },
+                    label = { Text("Rotatable Lens Stream Key (_R) - Optional") },
+                    placeholder = { Text("Leave blank to stream Fixed lens only") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SurveillanceGreen,
+                        unfocusedBorderColor = DarkBorder
+                    ),
+                    singleLine = true
+                )
+
+                HorizontalDivider(color = DarkBorder)
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -308,12 +354,12 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Auto-Create Broadcasts via API",
+                            text = "Auto-Create Broadcasts via Google API",
                             style = MaterialTheme.typography.titleSmall,
                             color = TextPrimary
                         )
                         Text(
-                            text = "Uses 1-Tap Google Sign-In to create dated 8-hour Private broadcasts automatically.",
+                            text = "Only enable if you have configured Google Cloud OAuth credentials and signed in on the Dashboard.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -325,46 +371,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             settings.useAutoBroadcast = it
                         },
                         colors = SwitchDefaults.colors(checkedThumbColor = SurveillanceGreen)
-                    )
-                }
-
-                if (!useAutoBroadcast) {
-                    Text(
-                        text = "Custom Persistent RTMP Ingestion Endpoints (Fallback Mode):",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = LiveCyan
-                    )
-
-                    OutlinedTextField(
-                        value = manualRtmpFixed,
-                        onValueChange = {
-                            manualRtmpFixed = it
-                            settings.manualRtmpFixed = it
-                        },
-                        label = { Text("Fixed Lens RTMP Target (_F)") },
-                        placeholder = { Text("rtmps://a.rtmp.youtube.com/live2/xxxx-xxxx") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SurveillanceGreen,
-                            unfocusedBorderColor = DarkBorder
-                        ),
-                        singleLine = true
-                    )
-
-                    OutlinedTextField(
-                        value = manualRtmpRotatable,
-                        onValueChange = {
-                            manualRtmpRotatable = it
-                            settings.manualRtmpRotatable = it
-                        },
-                        label = { Text("Rotatable Lens RTMP Target (_R)") },
-                        placeholder = { Text("rtmps://a.rtmp.youtube.com/live2/yyyy-yyyy") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SurveillanceGreen,
-                            unfocusedBorderColor = DarkBorder
-                        ),
-                        singleLine = true
                     )
                 }
             }
