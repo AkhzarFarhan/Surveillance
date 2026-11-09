@@ -68,13 +68,6 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel
                 )
 
-                // 1-Tap Google Sign-In launcher
-                val googleSignInLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.StartActivityForResult()
-                ) { result ->
-                    viewModel.handleSignInResult(result.data)
-                }
-
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     bottomBar = {
@@ -106,13 +99,7 @@ class MainActivity : ComponentActivity() {
                             .padding(innerPadding)
                     ) {
                         when (currentScreen) {
-                            Screen.Dashboard -> DashboardScreen(
-                                viewModel = viewModel,
-                                onLaunchSignIn = {
-                                    val client = viewModel.authManager.getGoogleSignInClient()
-                                    googleSignInLauncher.launch(client.signInIntent)
-                                }
-                            )
+                            Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
                             Screen.Settings -> SettingsScreen(viewModel = viewModel)
                             Screen.Logs -> LogsScreen(viewModel = viewModel)
                         }

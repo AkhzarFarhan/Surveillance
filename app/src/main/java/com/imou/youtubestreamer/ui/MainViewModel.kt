@@ -1,10 +1,8 @@
 package com.imou.youtubestreamer.ui
 
 import android.app.Application
-import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.imou.youtubestreamer.auth.YouTubeAuthManager
 import com.imou.youtubestreamer.data.AppLogger
 import com.imou.youtubestreamer.data.AppSettings
 import com.imou.youtubestreamer.data.LogEntry
@@ -31,7 +29,6 @@ sealed class CameraTestState {
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val settings = AppSettings(application)
-    val authManager = YouTubeAuthManager(application, settings)
     private val cgiClient = DahuaCgiClient(settings)
     private val syncManager = DahuaSdCardSyncManager(application, settings)
 
@@ -40,15 +37,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _cameraTestState = MutableStateFlow<CameraTestState>(CameraTestState.Idle)
     val cameraTestState: StateFlow<CameraTestState> = _cameraTestState.asStateFlow()
-
-    private val _isSignedIn = MutableStateFlow(authManager.isUserSignedIn())
-    val isSignedIn: StateFlow<Boolean> = _isSignedIn.asStateFlow()
-
-    private val _userEmail = MutableStateFlow(settings.signedInEmail)
-    val userEmail: StateFlow<String> = _userEmail.asStateFlow()
-
-    private val _authError = MutableStateFlow<String?>(null)
-    val authError: StateFlow<String?> = _authError.asStateFlow()
 
     val updateStatus: StateFlow<UpdateStatus> = AppUpdateManager.status
 
@@ -103,16 +91,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _manualCheckMessage.value = null
     }
 
-    fun dismissAuthError() {
-        _authError.value = null
-    }
-
-    fun saveStreamKey(key: String) {
-        settings.manualRtmpFixed = key.trim()
-        settings.manualRtmpRotatable = key.trim()
-        settings.useAutoBroadcast = false
-        _authError.value = null
-        AppLogger.i("Settings", "Custom YouTube Stream Key configured successfully.")
+    fun saveStreamKeys(fixedKey: String, rotatableKey: String = "") {
+        settings.manualRtmpFixed = fixedKey.trim()
+        settings.manualRtmpRotatable = rotatableKey.trim()
+        AppLogger.i("Settings", "YouTube Stream Key updated (Fixed: ${if (fixedKey.isNotBlank()) "Set" else "Empty"}, Rotatable: ${if (rotatableKey.isNotBlank()) "Set" else "Empty"})")
     }
 
     fun toggleStreaming() {
@@ -121,25 +103,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             CctvStreamingService.stop(app)
         } else {
             CctvStreamingService.start(app)
-        }
-    }
-
-    fun handleSignInResult(data: Intent?) {
-        val result = authManager.handleSignInResult(data)
-        if (result.isSuccess) {
-            _isSignedIn.value = true
-            _userEmail.value = settings.signedInEmail
-            _authError.value = null
-        } else {
-            _authError.value = result.exceptionOrNull()?.message
-        }
-    }
-
-    fun signOutGoogle() {
-        viewModelScope.launch {
-            authManager.signOut()
-            _isSignedIn.value = false
-            _userEmail.value = ""
         }
     }
 

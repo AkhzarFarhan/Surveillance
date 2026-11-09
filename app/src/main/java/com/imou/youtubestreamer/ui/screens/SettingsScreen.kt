@@ -47,7 +47,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var catchupSpeed by remember { mutableStateOf(settings.catchupSpeed) }
     var silentAudio by remember { mutableStateOf(settings.silentAudioEnabled) }
     var autoBoot by remember { mutableStateOf(settings.autoStartOnBoot) }
-    var useAutoBroadcast by remember { mutableStateOf(settings.useAutoBroadcast) }
 
     var manualRtmpFixed by remember { mutableStateOf(settings.manualRtmpFixed) }
     var manualRtmpRotatable by remember { mutableStateOf(settings.manualRtmpRotatable) }
@@ -353,35 +352,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     ),
                     singleLine = true
                 )
-
-                HorizontalDivider(color = DarkBorder)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Auto-Create Broadcasts via Google API",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Only enable if you have configured Google Cloud OAuth credentials and signed in on the Dashboard.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
-                        )
-                    }
-                    Switch(
-                        checked = useAutoBroadcast,
-                        onCheckedChange = {
-                            useAutoBroadcast = it
-                            settings.useAutoBroadcast = it
-                        },
-                        colors = SwitchDefaults.colors(checkedThumbColor = SurveillanceGreen)
-                    )
-                }
             }
         }
 

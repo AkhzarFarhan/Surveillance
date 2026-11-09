@@ -16,7 +16,6 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.imou.youtubestreamer.MainActivity
 import com.imou.youtubestreamer.R
-import com.imou.youtubestreamer.auth.YouTubeAuthManager
 import com.imou.youtubestreamer.data.*
 import com.imou.youtubestreamer.engine.DualStreamOrchestrator
 import com.imou.youtubestreamer.scheduler.SessionRotationScheduler
@@ -37,7 +36,6 @@ import kotlinx.coroutines.flow.asStateFlow
 class CctvStreamingService : LifecycleService() {
 
     private lateinit var settings: AppSettings
-    private lateinit var authManager: YouTubeAuthManager
     private lateinit var syncManager: DahuaSdCardSyncManager
     private lateinit var rotationScheduler: SessionRotationScheduler
     private lateinit var streamOrchestrator: DualStreamOrchestrator
@@ -47,8 +45,6 @@ class CctvStreamingService : LifecycleService() {
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-    private var currentFixedBroadcastId: String = ""
-    private var currentRotatableBroadcastId: String = ""
     private var currentFixedRtmp: String = ""
     private var currentRotatableRtmp: String = ""
 
@@ -90,7 +86,6 @@ class CctvStreamingService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         settings = AppSettings(applicationContext)
-        authManager = YouTubeAuthManager(applicationContext, settings)
         syncManager = DahuaSdCardSyncManager(applicationContext, settings)
         rotationScheduler = SessionRotationScheduler(applicationContext)
         streamOrchestrator = DualStreamOrchestrator(applicationContext, settings)
@@ -121,18 +116,20 @@ class CctvStreamingService : LifecycleService() {
     private fun startPipeline() {
         serviceScope.launch {
             _systemState.value = _systemState.value.copy(status = PipelineStatus.INITIALIZING)
-            updateNotification("Authenticating...", "Checking YouTube credentials...")
+            updateNotification("Initializing...", "Validating YouTube Stream Key...")
 
-            // Check if user is authenticated or using manual stream keys
-            val hasManualKey = settings.getFormattedFixedRtmp().isNotBlank() || settings.getFormattedRotatableRtmp().isNotBlank()
-            if (!authManager.isUserSignedIn() && !hasManualKey) {
+            val fixedRtmp = settings.getFormattedFixedRtmp()
+            val rotatableRtmp = settings.getFormattedRotatableRtmp()
+
+            if (fixedRtmp.isBlank() && rotatableRtmp.isBlank()) {
                 _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
-                updateNotification("Auth Required", "Sign in with Google or enter YouTube Stream Key.")
-                AppLogger.w("CctvService", "YouTube authentication required. Sign in with Google or enter Stream Key.")
+                updateNotification("Stream Key Missing", "Enter your YouTube Stream Key in the app.")
+                AppLogger.w("CctvService", "Cannot start streaming: YouTube Stream Key is not configured.")
                 return@launch
             }
 
             _systemState.value = _systemState.value.copy(status = PipelineStatus.STREAMING)
+            AppLogger.i("CctvService", "YouTube Stream Key validated. Starting 24/7 session rotation loop...")
 
             // Start 8-Hour Session Rotation Loop
             rotationScheduler.startRotationLoop(
@@ -161,44 +158,29 @@ class CctvStreamingService : LifecycleService() {
             "Active: $titleFixed & _R"
         )
 
-        // 1. Create Private YouTube Live Broadcasts
-        val fixedBroadcastResult = authManager.createPrivateBroadcast(titleFixed, "F")
-        val rotatableBroadcastResult = authManager.createPrivateBroadcast(titleRotatable, "R")
+        currentFixedRtmp = settings.getFormattedFixedRtmp()
+        currentRotatableRtmp = settings.getFormattedRotatableRtmp()
 
-        val fixedInfo = fixedBroadcastResult.getOrNull()
-        val rotatableInfo = rotatableBroadcastResult.getOrNull()
+        AppLogger.i("CctvService", "Starting 8h session $partIndex/3 via YouTube Stream Key: Fixed=${if (currentFixedRtmp.isNotBlank()) "Configured" else "Disabled"}, Rotatable=${if (currentRotatableRtmp.isNotBlank()) "Configured" else "Disabled"}")
 
-        currentFixedBroadcastId = fixedInfo?.broadcastId ?: ""
-        currentRotatableBroadcastId = rotatableInfo?.broadcastId ?: ""
-
-        currentFixedRtmp = fixedInfo?.rtmpIngestionEndpoint ?: settings.getFormattedFixedRtmp()
-        currentRotatableRtmp = rotatableInfo?.rtmpIngestionEndpoint ?: settings.getFormattedRotatableRtmp()
-
-        // 2. Start Dual Streaming Workers
+        // Start Dual Streaming Workers
         streamOrchestrator.startDualStreaming(
             fixedTargetRtmp = currentFixedRtmp,
             rotatableTargetRtmp = currentRotatableRtmp,
             fixedTitle = titleFixed,
             rotatableTitle = titleRotatable,
-            fixedWatchUrl = fixedInfo?.watchUrl ?: "",
-            rotatableWatchUrl = rotatableInfo?.watchUrl ?: ""
+            fixedWatchUrl = "",
+            rotatableWatchUrl = ""
         )
     }
 
     private suspend fun handleSessionEnding() {
         _systemState.value = _systemState.value.copy(status = PipelineStatus.ROTATING)
         updateNotification("Rotating Session", "Finalizing 8-hour archive. 15s break...")
+        AppLogger.i("CctvService", "8-Hour session complete. Disconnecting RTMP for 15s graceful break so YouTube finalizes the VOD replay...")
 
-        // Gracefully stop FFmpeg streams
+        // Gracefully stop FFmpeg streams. Disconnecting the RTMP socket signals YouTube to process the VOD recording.
         streamOrchestrator.stopLiveStreamsGracefully()
-
-        // Transition YouTube broadcasts to complete for permanent VOD archiving
-        if (currentFixedBroadcastId.isNotBlank()) {
-            authManager.finalizeBroadcast(currentFixedBroadcastId)
-        }
-        if (currentRotatableBroadcastId.isNotBlank()) {
-            authManager.finalizeBroadcast(currentRotatableBroadcastId)
-        }
     }
 
     private fun registerNetworkMonitoring() {

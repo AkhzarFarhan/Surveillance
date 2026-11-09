@@ -1,18 +1,22 @@
 package com.imou.youtubestreamer.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,22 +37,20 @@ import com.imou.youtubestreamer.ui.theme.*
 
 @Composable
 fun DashboardScreen(
-    viewModel: MainViewModel,
-    onLaunchSignIn: () -> Unit
+    viewModel: MainViewModel
 ) {
     val context = LocalContext.current
     val systemState by viewModel.systemState.collectAsState()
-    val isSignedIn by viewModel.isSignedIn.collectAsState()
-    val userEmail by viewModel.userEmail.collectAsState()
-    val authError by viewModel.authError.collectAsState()
     val settings = viewModel.settings
 
     val isIgnoringBatteryOptimizations = remember {
-        val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         powerManager.isIgnoringBatteryOptimizations(context.packageName)
     }
 
     var showStreamKeyDialog by remember { mutableStateOf(false) }
+    var fixedKey by remember { mutableStateOf(settings.manualRtmpFixed) }
+    var rotatableKey by remember { mutableStateOf(settings.manualRtmpRotatable) }
 
     Column(
         modifier = Modifier
@@ -96,174 +98,115 @@ fun DashboardScreen(
             }
         }
 
-        // Google Sign-In Error 10 Guidance Banner
-        if (authError != null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF2E1717)),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DangerRed)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = DangerRed)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Google Sign-In Configuration Required",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = DangerRed,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        IconButton(onClick = { viewModel.dismissAuthError() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = TextMuted)
-                        }
-                    }
-
-                    Text(
-                        text = "Google Play Services requires adding your package name and SHA-1 certificate to your Google Cloud Console OAuth 2.0 Client IDs:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextPrimary
-                    )
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DarkBg)
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text("Package: com.imou.youtubestreamer", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "SHA-1: 48:F8:49:4B:0C:22:A4:D9:D8:44:9F:CB:AC:CE:E5:77:30:96:9E:E8",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = LiveCyan,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = {
-                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SHA1", "48:F8:49:4B:0C:22:A4:D9:D8:44:9F:CB:AC:CE:E5:77:30:96:9E:E8"))
-                                android.widget.Toast.makeText(context, "SHA-1 copied to clipboard!", android.widget.Toast.LENGTH_SHORT).show()
-                            }) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy SHA-1", tint = LiveCyan)
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = DarkBorder)
-
-                    Text(
-                        text = "Or enter your YouTube Stream Key directly to stream immediately without Google Cloud Console:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-
-                    var inlineKey by remember { mutableStateOf("") }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = inlineKey,
-                            onValueChange = { inlineKey = it },
-                            placeholder = { Text("Paste YouTube Stream Key here...") },
-                            modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = SurveillanceGreen,
-                                unfocusedBorderColor = DarkBorder
-                            ),
-                            singleLine = true
-                        )
-                        Button(
-                            onClick = {
-                                if (inlineKey.isNotBlank()) {
-                                    viewModel.saveStreamKey(inlineKey)
-                                    android.widget.Toast.makeText(context, "Stream Key saved! Ready to stream.", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Save Key", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-
         // Master Pipeline Status Card
         PipelineStatusCard(systemState = systemState)
 
-        // 1-Tap Google & YouTube Auth Card
-        YouTubeAuthCard(
-            isSignedIn = isSignedIn,
-            userEmail = userEmail,
-            hasStreamKey = settings.manualRtmpFixed.isNotBlank(),
-            manualRtmpFixed = settings.manualRtmpFixed,
-            onSignInClick = onLaunchSignIn,
-            onSignOutClick = { viewModel.signOutGoogle() },
-            onEnterStreamKeyClick = { showStreamKeyDialog = true }
+        // YouTube Stream Key Ingestion Card (Zero Google Login Required)
+        YouTubeStreamKeyCard(
+            hasStreamKey = fixedKey.isNotBlank() || rotatableKey.isNotBlank(),
+            fixedKey = fixedKey,
+            rotatableKey = rotatableKey,
+            onConfigureClick = { showStreamKeyDialog = true },
+            onQuickSave = { pastedKey ->
+                viewModel.saveStreamKeys(pastedKey, rotatableKey)
+                fixedKey = pastedKey
+                Toast.makeText(context, "Stream Key saved successfully!", Toast.LENGTH_SHORT).show()
+            },
+            onOpenYouTubeStudio = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://studio.youtube.com/channel/live")).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            }
         )
 
-        // Stream Key Dialog
+        // Stream Key Configuration Dialog
         if (showStreamKeyDialog) {
-            var inputFixedKey by remember { mutableStateOf(settings.manualRtmpFixed) }
-            var inputRotatableKey by remember { mutableStateOf(settings.manualRtmpRotatable) }
+            var tempFixed by remember { mutableStateOf(fixedKey) }
+            var tempRotatable by remember { mutableStateOf(rotatableKey) }
 
             AlertDialog(
                 onDismissRequest = { showStreamKeyDialog = false },
-                title = { Text("Configure YouTube Stream Key") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.VpnKey, contentDescription = null, tint = LiveCyan)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("YouTube Stream Keys")
+                    }
+                },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
-                            "Get your Stream Key from YouTube Studio (studio.youtube.com/channel/live). You do NOT need to sign in to Google in this mode.",
+                            text = "Copy your Stream Key from YouTube Studio Live Control Room. No Google sign-in is needed — YouTube ingests video directly via RTMPS.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
+
                         OutlinedTextField(
-                            value = inputFixedKey,
-                            onValueChange = { inputFixedKey = it },
+                            value = tempFixed,
+                            onValueChange = { tempFixed = it },
                             label = { Text("Fixed Lens Stream Key (_F)") },
-                            placeholder = { Text("e.g. xxxx-xxxx-xxxx-xxxx") },
+                            placeholder = { Text("xxxx-xxxx-xxxx-xxxx") },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clip.primaryClip?.getItemAt(0)?.text?.let { text ->
+                                        tempFixed = text.toString().trim()
+                                    }
+                                }) {
+                                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
+                                }
+                            }
                         )
+
                         OutlinedTextField(
-                            value = inputRotatableKey,
-                            onValueChange = { inputRotatableKey = it },
+                            value = tempRotatable,
+                            onValueChange = { tempRotatable = it },
                             label = { Text("Rotatable Lens Key (_R) - Optional") },
-                            placeholder = { Text("Leave blank to stream Fixed lens only") },
+                            placeholder = { Text("Leave blank for Fixed lens only") },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clip.primaryClip?.getItemAt(0)?.text?.let { text ->
+                                        tempRotatable = text.toString().trim()
+                                    }
+                                }) {
+                                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
+                                }
+                            }
                         )
+
+                        TextButton(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://studio.youtube.com/channel/live")).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open YouTube Studio", fontSize = 12.sp, color = LiveCyan)
+                        }
                     }
                 },
                 confirmButton = {
                     Button(
                         onClick = {
-                            settings.manualRtmpFixed = inputFixedKey.trim()
-                            settings.manualRtmpRotatable = inputRotatableKey.trim()
-                            settings.useAutoBroadcast = false
-                            viewModel.dismissAuthError()
+                            viewModel.saveStreamKeys(tempFixed, tempRotatable)
+                            fixedKey = tempFixed.trim()
+                            rotatableKey = tempRotatable.trim()
                             showStreamKeyDialog = false
-                            android.widget.Toast.makeText(context, "Stream key(s) saved! Ready to stream.", android.widget.Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Stream Key(s) saved! Ready to stream.", Toast.LENGTH_SHORT).show()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg)
                     ) {
-                        Text("Save & Apply")
+                        Text("Save & Apply", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
@@ -323,7 +266,14 @@ fun DashboardScreen(
         // Master Action Buttons
         val isRunning = systemState.status != PipelineStatus.IDLE
         Button(
-            onClick = { viewModel.toggleStreaming() },
+            onClick = {
+                if (!isRunning && fixedKey.isBlank() && rotatableKey.isBlank()) {
+                    showStreamKeyDialog = true
+                    Toast.makeText(context, "Please enter your YouTube Stream Key first.", Toast.LENGTH_LONG).show()
+                } else {
+                    viewModel.toggleStreaming()
+                }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
@@ -356,6 +306,130 @@ fun DashboardScreen(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+fun YouTubeStreamKeyCard(
+    hasStreamKey: Boolean,
+    fixedKey: String,
+    rotatableKey: String,
+    onConfigureClick: () -> Unit,
+    onQuickSave: (String) -> Unit,
+    onOpenYouTubeStudio: () -> Unit
+) {
+    val context = LocalContext.current
+    var quickInput by remember { mutableStateOf("") }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = androidx.compose.ui.graphics.SolidColor(if (hasStreamKey) SurveillanceGreen else WarningAmber)
+        ),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Icon(
+                        if (hasStreamKey) Icons.Default.CheckCircle else Icons.Default.VpnKey,
+                        contentDescription = null,
+                        tint = if (hasStreamKey) SurveillanceGreen else WarningAmber,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (hasStreamKey) "YouTube Stream Key Active" else "YouTube Stream Key Required",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (hasStreamKey) {
+                                val masked = if (fixedKey.length > 4) "•••• •••• ${fixedKey.takeLast(4)}" else "Configured"
+                                "Fixed Lens (_F): $masked" + if (rotatableKey.isNotBlank()) " + Rotatable (_R)" else ""
+                            } else {
+                                "No Google login needed. Direct RTMPS ingest."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (hasStreamKey) SurveillanceGreen else TextSecondary
+                        )
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onConfigureClick,
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(if (hasStreamKey) "Edit Key" else "Set Key", fontSize = 12.sp, color = LiveCyan)
+                }
+            }
+
+            if (!hasStreamKey) {
+                HorizontalDivider(color = DarkBorder)
+
+                Text(
+                    text = "Quick Paste Stream Key:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = quickInput,
+                        onValueChange = { quickInput = it },
+                        placeholder = { Text("Paste xxxx-xxxx-xxxx-xxxx here") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clip.primaryClip?.getItemAt(0)?.text?.let { text ->
+                                    quickInput = text.toString().trim()
+                                }
+                            }) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
+                            }
+                        }
+                    )
+
+                    Button(
+                        onClick = {
+                            if (quickInput.isNotBlank()) {
+                                onQuickSave(quickInput.trim())
+                                quickInput = ""
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Save", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onOpenYouTubeStudio) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp), tint = LiveCyan)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Get Key from YouTube Studio", fontSize = 12.sp, color = LiveCyan)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -574,88 +648,5 @@ fun MetricColumn(label: String, value: String) {
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.SemiBold
         )
-    }
-}
-
-@Composable
-fun YouTubeAuthCard(
-    isSignedIn: Boolean,
-    userEmail: String,
-    hasStreamKey: Boolean,
-    manualRtmpFixed: String,
-    onSignInClick: () -> Unit,
-    onSignOutClick: () -> Unit,
-    onEnterStreamKeyClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        Icons.Default.AccountCircle,
-                        contentDescription = null,
-                        tint = if (isSignedIn || hasStreamKey) SurveillanceGreen else TextMuted,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        val headerText = when {
-                            isSignedIn -> "Connected to YouTube"
-                            hasStreamKey -> "YouTube Stream Key Active"
-                            else -> "YouTube Not Connected"
-                        }
-                        val subText = when {
-                            isSignedIn -> userEmail
-                            hasStreamKey -> "Key: ${manualRtmpFixed.take(16)}... (Ready)"
-                            else -> "Sign in or enter a Stream Key"
-                        }
-                        Text(
-                            text = headerText,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = subText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
-                        )
-                    }
-                }
-
-                if (isSignedIn) {
-                    TextButton(onClick = onSignOutClick) {
-                        Text("Disconnect", color = TextMuted, style = MaterialTheme.typography.labelSmall)
-                    }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedButton(
-                            onClick = onEnterStreamKeyClick,
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(if (hasStreamKey) "Edit Key" else "Stream Key", fontSize = 12.sp, color = LiveCyan)
-                        }
-
-                        Button(
-                            onClick = onSignInClick,
-                            colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text("1-Tap Sign-In", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
