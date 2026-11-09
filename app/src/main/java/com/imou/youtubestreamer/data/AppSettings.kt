@@ -30,7 +30,7 @@ class AppSettings(context: Context) {
     }
 
     var cameraIp: String
-        get() = prefs.getString(KEY_CAMERA_IP, "192.168.1.150") ?: "192.168.1.150"
+        get() = prefs.getString(KEY_CAMERA_IP, "192.168.1.2") ?: "192.168.1.2"
         set(value) = prefs.edit().putString(KEY_CAMERA_IP, value.trim()).apply()
 
     var rtspPort: Int
