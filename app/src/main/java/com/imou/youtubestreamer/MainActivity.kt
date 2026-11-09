@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
 import com.imou.youtubestreamer.ui.MainViewModel
+import com.imou.youtubestreamer.ui.components.AppUpdateDialog
 import com.imou.youtubestreamer.ui.screens.DashboardScreen
 import com.imou.youtubestreamer.ui.screens.LogsScreen
 import com.imou.youtubestreamer.ui.screens.SettingsScreen
@@ -52,6 +53,20 @@ class MainActivity : ComponentActivity() {
         setContent {
             SurveillanceTheme {
                 var currentScreen by remember { mutableStateOf<Screen>(Screen.Dashboard) }
+                val updateStatus by viewModel.updateStatus.collectAsState()
+
+                // Check for updates automatically on startup if enabled
+                LaunchedEffect(Unit) {
+                    if (viewModel.settings.autoCheckUpdates) {
+                        viewModel.checkForUpdates(this@MainActivity, manual = false)
+                    }
+                }
+
+                // Global In-App Update Dialog (Handles UpdateAvailable, Downloading, ReadyToInstall, Error)
+                AppUpdateDialog(
+                    status = updateStatus,
+                    viewModel = viewModel
+                )
 
                 // 1-Tap Google Sign-In launcher
                 val googleSignInLauncher = rememberLauncherForActivityResult(

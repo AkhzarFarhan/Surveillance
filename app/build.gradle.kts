@@ -12,8 +12,12 @@ android {
         applicationId = "com.imou.youtubestreamer"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0.0"
+
+        val envCode = (System.getenv("VERSION_CODE") ?: project.findProperty("versionCode")?.toString())?.toIntOrNull()
+        val envName = System.getenv("VERSION_NAME") ?: project.findProperty("versionName")?.toString()
+
+        versionCode = envCode ?: 1
+        versionName = envName ?: "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

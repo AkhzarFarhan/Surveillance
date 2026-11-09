@@ -113,6 +113,10 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_START_BOOT, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_START_BOOT, value).apply()
 
+    var autoCheckUpdates: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_CHECK_UPDATES, value).apply()
+
     var lastOutageTimestamp: Long
         get() = prefs.getLong(KEY_LAST_OUTAGE, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_OUTAGE, value).apply()
@@ -138,6 +142,7 @@ class AppSettings(context: Context) {
         private const val KEY_MANUAL_RTMP_ROTATABLE = "pref_manual_rtmp_rotatable"
         private const val KEY_HOME_WIFI_SSID = "pref_home_wifi_ssid"
         private const val KEY_AUTO_START_BOOT = "pref_auto_start_boot"
+        private const val KEY_AUTO_CHECK_UPDATES = "pref_auto_check_updates"
         private const val KEY_LAST_OUTAGE = "pref_last_outage"
         private const val KEY_SIGNED_IN_EMAIL = "pref_signed_in_email"
     }

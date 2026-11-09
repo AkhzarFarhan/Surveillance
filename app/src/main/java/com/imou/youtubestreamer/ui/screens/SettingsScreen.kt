@@ -19,14 +19,23 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.imou.youtubestreamer.update.AppUpdateManager
+import com.imou.youtubestreamer.update.UpdateStatus
 import com.imou.youtubestreamer.ui.CameraTestState
 import com.imou.youtubestreamer.ui.MainViewModel
 import com.imou.youtubestreamer.ui.theme.*
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val settings = viewModel.settings
     val testState by viewModel.cameraTestState.collectAsState()
+    val updateStatus by viewModel.updateStatus.collectAsState()
+    val manualCheckMsg by viewModel.manualCheckMessage.collectAsState()
+
+    val (versionName, versionCode) = remember { AppUpdateManager.getCurrentVersionInfo(context) }
+    var autoCheckUpdates by remember { mutableStateOf(settings.autoCheckUpdates) }
 
     var cameraIp by remember { mutableStateOf(settings.cameraIp) }
     var rtspPort by remember { mutableStateOf(settings.rtspPort.toString()) }
@@ -371,6 +380,108 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             settings.useAutoBroadcast = it
                         },
                         colors = SwitchDefaults.colors(checkedThumbColor = SurveillanceGreen)
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = "APP UPDATES",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted,
+            letterSpacing = 1.sp
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Surveillance v$versionName",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Build $versionCode • GitHub Releases",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+
+                    Icon(
+                        Icons.Default.SystemUpdate,
+                        contentDescription = null,
+                        tint = LiveCyan,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                HorizontalDivider(color = DarkBorder)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Auto-Check for Updates",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Checks GitHub for new releases whenever the app starts.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = autoCheckUpdates,
+                        onCheckedChange = {
+                            autoCheckUpdates = it
+                            settings.autoCheckUpdates = it
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = SurveillanceGreen)
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        viewModel.clearManualCheckMessage()
+                        viewModel.checkForUpdates(context, manual = true)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = updateStatus !is UpdateStatus.Checking && updateStatus !is UpdateStatus.Downloading,
+                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant, contentColor = TextPrimary),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    if (updateStatus is UpdateStatus.Checking) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = LiveCyan, strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Checking GitHub for Updates...")
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = LiveCyan)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Check for Updates Now")
+                    }
+                }
+
+                if (manualCheckMsg != null) {
+                    Text(
+                        text = manualCheckMsg ?: "",
+                        color = if (manualCheckMsg!!.contains("latest", ignoreCase = true)) SurveillanceGreen else WarningAmber,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }

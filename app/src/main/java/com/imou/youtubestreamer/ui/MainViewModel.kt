@@ -12,6 +12,10 @@ import com.imou.youtubestreamer.data.SystemStreamState
 import com.imou.youtubestreamer.service.CctvStreamingService
 import com.imou.youtubestreamer.sync.DahuaCgiClient
 import com.imou.youtubestreamer.sync.DahuaSdCardSyncManager
+import com.imou.youtubestreamer.update.AppUpdateManager
+import com.imou.youtubestreamer.update.UpdateStatus
+import android.content.Context
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +49,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _authError = MutableStateFlow<String?>(null)
     val authError: StateFlow<String?> = _authError.asStateFlow()
+
+    val updateStatus: StateFlow<UpdateStatus> = AppUpdateManager.status
+
+    private val _manualCheckMessage = MutableStateFlow<String?>(null)
+    val manualCheckMessage: StateFlow<String?> = _manualCheckMessage.asStateFlow()
+
+    fun checkForUpdates(context: Context, manual: Boolean = false) {
+        viewModelScope.launch {
+            val result = AppUpdateManager.checkForUpdates(context)
+            if (manual) {
+                when (result) {
+                    is UpdateStatus.UpToDate -> {
+                        _manualCheckMessage.value = "You are on the latest version (v${result.currentVersion})."
+                    }
+                    is UpdateStatus.Error -> {
+                        _manualCheckMessage.value = "Check failed: ${result.message}"
+                    }
+                    is UpdateStatus.UpdateAvailable -> {
+                        _manualCheckMessage.value = null
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate(context: Context, downloadUrl: String) {
+        viewModelScope.launch {
+            val result = AppUpdateManager.downloadUpdate(context, downloadUrl)
+            if (result.isSuccess) {
+                val apkFile = result.getOrThrow()
+                if (AppUpdateManager.canInstallPackages(context)) {
+                    AppUpdateManager.installApk(context, apkFile)
+                }
+            }
+        }
+    }
+
+    fun installDownloadedApk(context: Context, apkFile: File) {
+        if (AppUpdateManager.canInstallPackages(context)) {
+            AppUpdateManager.installApk(context, apkFile)
+        } else {
+            AppUpdateManager.openInstallPermissionSettings(context)
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        AppUpdateManager.resetStatus()
+    }
+
+    fun clearManualCheckMessage() {
+        _manualCheckMessage.value = null
+    }
 
     fun dismissAuthError() {
         _authError.value = null
