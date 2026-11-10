@@ -52,6 +52,7 @@ class DahuaCgiClient(private val settings: AppSettings) {
      * Consumer Imou cameras (e.g. IPC-S7XE) disable /cgi-bin/ HTTP while exposing ONVIF & RTSP.
      */
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
+        AppLogger.enter("CameraTest", "testConnection", "ip=${settings.cameraIp}, rtsp=${settings.rtspPort}, http=${settings.httpPort}, user=${settings.username}, pass=${AppLogger.maskSecret(settings.safetyCode)}")
         val rtspResult = onvifClient.testRtspDescribe(settings.fixedChannel, settings.streamSubtype)
         val onvifInfo = onvifClient.getDeviceInfo().getOrNull()
 
@@ -69,10 +70,11 @@ class DahuaCgiClient(private val settings: AppSettings) {
                 append("• ONVIF Port ${settings.httpPort}: ${if (onvifInfo != null) "OK" else "Unauthenticated/Unavailable"}")
                 if (cgiOk) append(" • HTTP CGI: OK")
                 if (codec == "H265" || codec == "HEVC") {
-                    append("\n⚠ Stream is H.265 — tap 'Switch Camera to H.264' below for YouTube RTMP compatibility.")
+                    append("\n⚠ Stream is H.265 — tap 'Configure Camera Streams for YouTube (H.264)' below.")
                 }
             }
             AppLogger.i("CameraTest", protocolNote)
+            AppLogger.exit("CameraTest", "testConnection", "Success($modelLabel, codec=$codec)")
             return@withContext Result.success(protocolNote)
         }
 
@@ -80,11 +82,13 @@ class DahuaCgiClient(private val settings: AppSettings) {
         if (tryQuickCgiCheck()) {
             val msg = "HTTP CGI connected at ${settings.cameraIp}:${settings.httpPort}, but RTSP failed: ${rtspResult.errorMessage}"
             AppLogger.w("CameraTest", msg)
+            AppLogger.exit("CameraTest", "testConnection", "Failure(RTSP failed, CGI ok)")
             return@withContext Result.failure(Exception(msg))
         }
 
         val err = rtspResult.errorMessage ?: "Connection failed to ${settings.cameraIp}"
         AppLogger.e("CameraTest", "Connection failed: $err")
+        AppLogger.exit("CameraTest", "testConnection", "Failure($err)")
         Result.failure(Exception(err))
     }
 

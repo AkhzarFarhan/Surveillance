@@ -26,8 +26,15 @@ import java.util.*
  */
 class SessionRotationScheduler(private val context: Context) {
 
+    companion object {
+        private const val TAG = "SessionScheduler"
+    }
+
     private var schedulerJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        AppLogger.exception(TAG, "scope.CoroutineExceptionHandler", throwable)
+    }
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + exceptionHandler)
     private val dateFormat = SimpleDateFormat("dd-MM-yyyy", Locale.US)
 
     private val _remainingTimeMs = MutableStateFlow(0L)
@@ -40,11 +47,13 @@ class SessionRotationScheduler(private val context: Context) {
     val currentDateStr: StateFlow<String> = _currentDateStr.asStateFlow()
 
     fun calculateCurrentPartIndex(hourOfDay: Int): Int {
-        return when (hourOfDay) {
+        val part = when (hourOfDay) {
             in 0..7 -> 1
             in 8..15 -> 2
             else -> 3
         }
+        AppLogger.step(TAG, "calculateCurrentPartIndex", "hourOfDay=$hourOfDay -> part=$part")
+        return part
     }
 
     /**
@@ -75,58 +84,74 @@ class SessionRotationScheduler(private val context: Context) {
         }
 
         // Subtract 20-second safety transition margin
-        return targetCal.timeInMillis - 20_000L
+        val targetMs = targetCal.timeInMillis - 20_000L
+        val remMin = (targetMs - System.currentTimeMillis()) / 60000
+        AppLogger.step(TAG, "calculateTargetEndTimeMs", "currentHour=$currentHour, targetEndHour=$targetEndHour -> targetMs=$targetMs (~${remMin}m remaining)")
+        return targetMs
     }
 
     fun startRotationLoop(
         onNewSessionStarting: suspend (partIndex: Int, dateStr: String) -> Unit,
         onSessionEnding: suspend () -> Unit
     ) {
+        AppLogger.enter(TAG, "startRotationLoop", "existingJobActive=${schedulerJob?.isActive}")
         schedulerJob?.cancel()
         schedulerJob = scope.launch {
-            while (isActive) {
-                val now = Calendar.getInstance()
-                val currentHour = now.get(Calendar.HOUR_OF_DAY)
-                val dateStr = dateFormat.format(now.time)
-                val partIndex = calculateCurrentPartIndex(currentHour)
+            AppLogger.enter(TAG, "startRotationLoop.coroutine")
+            try {
+                while (isActive) {
+                    val now = Calendar.getInstance()
+                    val currentHour = now.get(Calendar.HOUR_OF_DAY)
+                    val dateStr = synchronized(dateFormat) { dateFormat.format(now.time) }
+                    val partIndex = calculateCurrentPartIndex(currentHour)
 
-                _currentPartIndex.value = partIndex
-                _currentDateStr.value = dateStr
+                    _currentPartIndex.value = partIndex
+                    _currentDateStr.value = dateStr
 
-                AppLogger.i("SessionScheduler", "==================================================")
-                AppLogger.i("SessionScheduler", "STARTING 8-HOUR SESSION: $dateStr Part $partIndex of 3")
-                AppLogger.i("SessionScheduler", "Target Titles:")
-                AppLogger.i("SessionScheduler", "  - $dateStr Part ${partIndex} of 3_F (Fixed Lens)")
-                AppLogger.i("SessionScheduler", "  - $dateStr Part ${partIndex} of 3_R (Rotatable Lens)")
-                AppLogger.i("SessionScheduler", "==================================================")
+                    AppLogger.i(TAG, "==================================================")
+                    AppLogger.i(TAG, "STARTING 8-HOUR SESSION: $dateStr Part $partIndex of 3")
+                    AppLogger.i(TAG, "Target Titles:")
+                    AppLogger.i(TAG, "  - $dateStr Part ${partIndex} of 3_F (Fixed Lens)")
+                    AppLogger.i(TAG, "  - $dateStr Part ${partIndex} of 3_R (Rotatable Lens)")
+                    AppLogger.i(TAG, "==================================================")
 
-                // 1. Notify service to create YouTube broadcasts & launch dual streams
-                onNewSessionStarting(partIndex, dateStr)
+                    // 1. Notify service to create YouTube broadcasts & launch dual streams
+                    onNewSessionStarting(partIndex, dateStr)
 
-                // 2. Loop until the 8-hour window boundary is reached
-                val targetEndTime = calculateTargetEndTimeMs()
+                    // 2. Loop until the 8-hour window boundary is reached
+                    val targetEndTime = calculateTargetEndTimeMs()
 
-                while (System.currentTimeMillis() < targetEndTime && isActive) {
-                    val remaining = targetEndTime - System.currentTimeMillis()
-                    _remainingTimeMs.value = if (remaining > 0) remaining else 0L
-                    delay(1000)
+                    while (System.currentTimeMillis() < targetEndTime && isActive) {
+                        val remaining = targetEndTime - System.currentTimeMillis()
+                        _remainingTimeMs.value = if (remaining > 0) remaining else 0L
+                        delay(1000)
+                    }
+
+                    if (!isActive) break
+
+                    // 3. Gracefully end the session
+                    AppLogger.i(TAG, "8-Hour session boundary reached. Ending session gracefully for YouTube VOD archiving...")
+                    onSessionEnding()
+
+                    // 4. Graceful 15-second gap for YouTube ingestion buffers to settle
+                    AppLogger.i(TAG, "Waiting 15 seconds graceful gap for YouTube cloud archives to seal...")
+                    delay(15_000L)
                 }
-
-                if (!isActive) break
-
-                // 3. Gracefully end the session
-                AppLogger.i("SessionScheduler", "8-Hour session boundary reached. Ending session gracefully for YouTube VOD archiving...")
-                onSessionEnding()
-
-                // 4. Graceful 15-second gap for YouTube ingestion buffers to settle
-                AppLogger.i("SessionScheduler", "Waiting 15 seconds graceful gap for YouTube cloud archives to seal...")
-                delay(15_000L)
+                AppLogger.exit(TAG, "startRotationLoop.coroutine", "Loop terminated normally")
+            } catch (ce: CancellationException) {
+                AppLogger.step(TAG, "startRotationLoop.coroutine", "Rotation loop cancelled cleanly")
+                throw ce
+            } catch (t: Throwable) {
+                AppLogger.exception(TAG, "startRotationLoop.coroutine", t)
             }
         }
+        AppLogger.exit(TAG, "startRotationLoop", "schedulerJob started")
     }
 
     fun stop() {
+        AppLogger.enter(TAG, "stop", "jobActive=${schedulerJob?.isActive}")
         schedulerJob?.cancel()
         _remainingTimeMs.value = 0L
+        AppLogger.exit(TAG, "stop", "Stopped")
     }
 }

@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
+import com.imou.youtubestreamer.data.AppLogger
 import com.imou.youtubestreamer.ui.MainViewModel
 import com.imou.youtubestreamer.ui.components.AppUpdateDialog
 import com.imou.youtubestreamer.ui.screens.DashboardScreen
@@ -37,17 +38,26 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private val viewModel: MainViewModel by viewModels()
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            AppLogger.step(TAG, "notificationPermissionLauncher", "POST_NOTIFICATIONS granted=$granted")
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppLogger.enter(TAG, "onCreate", "savedInstanceState=${savedInstanceState != null}")
         super.onCreate(savedInstanceState)
 
         // Request notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            val hasPerm = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            AppLogger.step(TAG, "onCreate", "Android 13+ POST_NOTIFICATIONS alreadyGranted=$hasPerm")
+            if (!hasPerm) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
@@ -82,7 +92,10 @@ class MainActivity : ComponentActivity() {
                                     icon = { Icon(screen.icon, contentDescription = screen.title) },
                                     label = { Text(screen.title) },
                                     selected = currentScreen == screen,
-                                    onClick = { currentScreen = screen },
+                                    onClick = {
+                                        AppLogger.step(TAG, "NavigationBarItem.onClick", "Switching screen to ${screen.route}")
+                                        currentScreen = screen
+                                    },
                                     colors = NavigationBarItemDefaults.colors(
                                         selectedIconColor = SurveillanceGreen,
                                         selectedTextColor = SurveillanceGreen,
@@ -109,5 +122,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        AppLogger.exit(TAG, "onCreate", "UI content set")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppLogger.step(TAG, "onResume", "Activity resumed")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        AppLogger.step(TAG, "onPause", "Activity paused")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        AppLogger.step(TAG, "onDestroy", "Activity destroyed")
     }
 }

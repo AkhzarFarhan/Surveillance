@@ -264,9 +264,14 @@ fun DashboardScreen(
         }
 
         // Master Action Buttons
-        val isRunning = systemState.status != PipelineStatus.IDLE
+        val isRunning = systemState.status != PipelineStatus.IDLE && systemState.status != PipelineStatus.ERROR
         Button(
             onClick = {
+                com.imou.youtubestreamer.data.AppLogger.enter(
+                    "DashboardScreen",
+                    "onStartStopClick",
+                    "isRunning=$isRunning, status=${systemState.status}, fixedKeySet=${fixedKey.isNotBlank()}, rotKeySet=${rotatableKey.isNotBlank()}"
+                )
                 if (!isRunning && fixedKey.isBlank() && rotatableKey.isBlank()) {
                     showStreamKeyDialog = true
                     Toast.makeText(context, "Please enter your YouTube Stream Key first.", Toast.LENGTH_LONG).show()

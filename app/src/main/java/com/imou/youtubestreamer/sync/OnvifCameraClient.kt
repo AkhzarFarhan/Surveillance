@@ -44,6 +44,10 @@ data class OnvifDeviceInfo(
  */
 class OnvifCameraClient(private val settings: AppSettings) {
 
+    companion object {
+        private const val TAG = "ONVIF"
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
@@ -58,9 +62,15 @@ class OnvifCameraClient(private val settings: AppSettings) {
         subtype: Int = settings.streamSubtype
     ): RtspProbeResult = withContext(Dispatchers.IO) {
         val uri = "rtsp://${settings.cameraIp}:${settings.rtspPort}/cam/realmonitor?channel=$channel&subtype=$subtype"
+        AppLogger.enter(
+            TAG,
+            "testRtspDescribe",
+            "uri='$uri', user='${settings.username}', pass=${AppLogger.maskSecret(settings.safetyCode)}"
+        )
         var socket: Socket? = null
         try {
             socket = Socket()
+            AppLogger.step(TAG, "testRtspDescribe", "Connecting TCP socket to ${settings.cameraIp}:${settings.rtspPort}...")
             socket.connect(InetSocketAddress(settings.cameraIp, settings.rtspPort), 3500)
             socket.soTimeout = 4000
 
@@ -73,30 +83,42 @@ class OnvifCameraClient(private val settings: AppSettings) {
             out.flush()
 
             val resp1 = readRtspResponse(reader)
+            AppLogger.step(TAG, "testRtspDescribe", "CSeq 1 response: code=${resp1.statusCode}, line='${resp1.statusLine}', headers=${resp1.headers.keys}")
+
             if (resp1.statusCode == 200) {
                 val (vCodec, aCodec) = parseCodecsFromSdp(resp1.body)
-                return@withContext RtspProbeResult(true, 200, resp1.statusLine, vCodec, aCodec)
+                val res = RtspProbeResult(true, 200, resp1.statusLine, vCodec, aCodec)
+                AppLogger.exit(TAG, "testRtspDescribe", res)
+                return@withContext res
             }
 
             if (resp1.statusCode != 401) {
-                return@withContext RtspProbeResult(
+                AppLogger.unexpected(TAG, "testRtspDescribe", "Expected 401 Digest challenge or 200 OK", resp1.statusLine)
+                val res = RtspProbeResult(
                     success = false,
                     statusCode = resp1.statusCode,
                     statusLine = resp1.statusLine,
                     errorMessage = "Unexpected RTSP response: ${resp1.statusLine}"
                 )
+                AppLogger.exit(TAG, "testRtspDescribe", res)
+                return@withContext res
             }
 
             val wwwAuth = resp1.headers["www-authenticate"].orEmpty()
             val realm = Regex("""realm="([^"]+)"""").find(wwwAuth)?.groupValues?.get(1)
             val nonce = Regex("""nonce="([^"]+)"""").find(wwwAuth)?.groupValues?.get(1)
+            AppLogger.step(TAG, "testRtspDescribe", "Parsed challenge: realm='$realm', nonceLen=${nonce?.length ?: 0}")
+
             if (realm.isNullOrEmpty() || nonce.isNullOrEmpty()) {
-                return@withContext RtspProbeResult(
+                AppLogger.unexpected(TAG, "testRtspDescribe", "Incomplete WWW-Authenticate header", wwwAuth)
+                val res = RtspProbeResult(
                     success = false,
                     statusCode = 401,
                     statusLine = resp1.statusLine,
                     errorMessage = "RTSP requires Digest auth, but challenge header was incomplete."
                 )
+                AppLogger.exit(TAG, "testRtspDescribe", res)
+                return@withContext res
             }
 
             // Step 2: Authenticated DESCRIBE
@@ -112,10 +134,13 @@ class OnvifCameraClient(private val settings: AppSettings) {
             out.flush()
 
             val resp2 = readRtspResponse(reader)
-            return@withContext if (resp2.statusCode == 200) {
+            AppLogger.step(TAG, "testRtspDescribe", "CSeq 2 response: code=${resp2.statusCode}, line='${resp2.statusLine}', sdpLen=${resp2.body.length}")
+
+            val res = if (resp2.statusCode == 200) {
                 val (vCodec, aCodec) = parseCodecsFromSdp(resp2.body)
                 RtspProbeResult(true, 200, resp2.statusLine, vCodec, aCodec)
             } else {
+                AppLogger.unexpected(TAG, "testRtspDescribe", "Authenticated DESCRIBE did not return 200", resp2.statusLine)
                 RtspProbeResult(
                     success = false,
                     statusCode = resp2.statusCode,
@@ -127,17 +152,22 @@ class OnvifCameraClient(private val settings: AppSettings) {
                     }
                 )
             }
-        } catch (e: Exception) {
-            RtspProbeResult(
+            AppLogger.exit(TAG, "testRtspDescribe", res)
+            return@withContext res
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "testRtspDescribe", t, "uri=$uri")
+            val res = RtspProbeResult(
                 success = false,
                 statusCode = -1,
                 statusLine = "",
-                errorMessage = e.localizedMessage ?: "RTSP connection failed"
+                errorMessage = "${t::class.java.simpleName}: ${t.localizedMessage ?: "RTSP connection failed"}"
             )
+            AppLogger.exit(TAG, "testRtspDescribe", res)
+            res
         } finally {
             try {
                 socket?.close()
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
             }
         }
     }
@@ -146,9 +176,10 @@ class OnvifCameraClient(private val settings: AppSettings) {
      * Retrieves hardware model, manufacturer, serial, and firmware over ONVIF Device Service.
      */
     suspend fun getDeviceInfo(): Result<OnvifDeviceInfo> = withContext(Dispatchers.IO) {
+        AppLogger.enter(TAG, "getDeviceInfo", "ip=${settings.cameraIp}:${settings.httpPort}")
         val bodyXml = """<GetDeviceInformation xmlns="http://www.onvif.org/ver10/device/wsdl"/>"""
         val resp = executeOnvifSoap("/onvif/device_service", bodyXml, useAuth = true)
-        return@withContext resp.mapCatching { xml ->
+        val result = resp.mapCatching { xml ->
             OnvifDeviceInfo(
                 manufacturer = extractXmlTag(xml, "Manufacturer").ifBlank { "Imou/Dahua" },
                 model = extractXmlTag(xml, "Model").ifBlank { "Unknown" },
@@ -156,6 +187,8 @@ class OnvifCameraClient(private val settings: AppSettings) {
                 serialNumber = extractXmlTag(xml, "SerialNumber")
             )
         }
+        AppLogger.exit(TAG, "getDeviceInfo", result.getOrNull() ?: "Error(${result.exceptionOrNull()?.message})")
+        return@withContext result
     }
 
     /**
@@ -163,16 +196,21 @@ class OnvifCameraClient(private val settings: AppSettings) {
      * so YouTube RTMP stream copy (-c:v copy) works natively with ~2% CPU usage.
      */
     suspend fun switchMainStreamsToH264(): Result<String> = withContext(Dispatchers.IO) {
+        AppLogger.enter(TAG, "switchMainStreamsToH264")
         val tokens = listOf("VideoEncoder000", "VideoEncoder100")
         val updated = mutableListOf<String>()
 
         for (token in tokens) {
             val getXml = """<GetVideoEncoderConfiguration xmlns="http://www.onvif.org/ver10/media/wsdl"><ConfigurationToken>$token</ConfigurationToken></GetVideoEncoderConfiguration>"""
             val cfgResp = executeOnvifSoap("/onvif/media_service", getXml, useAuth = true)
-            if (cfgResp.isFailure) continue
+            if (cfgResp.isFailure) {
+                AppLogger.unexpected(TAG, "switchMainStreamsToH264", "GetVideoEncoderConfiguration failed for $token", cfgResp.exceptionOrNull()?.message)
+                continue
+            }
 
             val xml = cfgResp.getOrNull().orEmpty()
             val encoding = extractXmlTag(xml, "Encoding")
+            AppLogger.step(TAG, "switchMainStreamsToH264", "Token $token current encoding='$encoding'")
             if (encoding.equals("H264", ignoreCase = true)) {
                 updated.add("$token (already H.264)")
                 continue
@@ -229,23 +267,30 @@ class OnvifCameraClient(private val settings: AppSettings) {
 
             val setResp = executeOnvifSoap("/onvif/media_service", setXml, useAuth = true)
             if (setResp.isSuccess) {
-                AppLogger.i("ONVIF", "Switched $token ($width x $height) from $encoding to H.264.")
+                AppLogger.i(TAG, "Switched $token ($width x $height) from $encoding to H.264.")
                 updated.add("$token -> H.264")
             } else {
                 val err = setResp.exceptionOrNull()?.message ?: "Failed"
-                AppLogger.w("ONVIF", "Failed switching $token to H.264: $err")
+                AppLogger.w(TAG, "Failed switching $token to H.264: $err")
+                AppLogger.exit(TAG, "switchMainStreamsToH264", "Failure($err)")
                 return@withContext Result.failure(Exception("Failed switching $token to H.264: $err"))
             }
         }
 
-        if (updated.isEmpty()) {
+        val finalRes = if (updated.isEmpty()) {
+            AppLogger.unexpected(TAG, "switchMainStreamsToH264", "No ONVIF encoder profiles found on device")
             Result.failure(Exception("No ONVIF encoder profiles found on device."))
         } else {
             Result.success("Camera streams configured for YouTube RTMP: ${updated.joinToString(", ")}")
         }
+        AppLogger.exit(TAG, "switchMainStreamsToH264", finalRes.getOrNull() ?: finalRes.exceptionOrNull()?.message)
+        finalRes
     }
 
     private fun executeOnvifSoap(path: String, bodyXml: String, useAuth: Boolean): Result<String> {
+        val actionName = bodyXml.substringAfter("<").substringBefore(" ").substringBefore(">")
+        val url = "http://${settings.cameraIp}:${settings.httpPort}$path"
+        AppLogger.enter(TAG, "executeOnvifSoap", "url='$url', action='$actionName', useAuth=$useAuth")
         val headerXml = if (useAuth) buildWsSecurityHeader(settings.username, settings.safetyCode) else ""
         val envelope = """
             <?xml version="1.0" encoding="utf-8"?>
@@ -255,7 +300,6 @@ class OnvifCameraClient(private val settings: AppSettings) {
             </s:Envelope>
         """.trimIndent()
 
-        val url = "http://${settings.cameraIp}:${settings.httpPort}$path"
         val request = Request.Builder()
             .url(url)
             .post(envelope.toRequestBody("application/soap+xml; charset=utf-8".toMediaType()))
@@ -264,15 +308,20 @@ class OnvifCameraClient(private val settings: AppSettings) {
         return try {
             client.newCall(request).execute().use { resp ->
                 val respBody = resp.body?.string().orEmpty()
+                AppLogger.step(TAG, "executeOnvifSoap", "HTTP ${resp.code} (${resp.message}), bodyLen=${respBody.length}")
                 if (resp.isSuccessful && !respBody.contains(":Fault>")) {
+                    AppLogger.exit(TAG, "executeOnvifSoap", "Success($actionName)")
                     Result.success(respBody)
                 } else {
                     val faultReason = extractXmlTag(respBody, "Text").ifBlank { "HTTP ${resp.code}: ${resp.message}" }
+                    AppLogger.unexpected(TAG, "executeOnvifSoap", "SOAP Fault or HTTP error on $actionName", faultReason)
+                    AppLogger.exit(TAG, "executeOnvifSoap", "Failure($faultReason)")
                     Result.failure(Exception(faultReason))
                 }
             }
-        } catch (e: Exception) {
-            Result.failure(e)
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "executeOnvifSoap", t, "url=$url, action=$actionName")
+            Result.failure(t)
         }
     }
 
@@ -298,7 +347,7 @@ class OnvifCameraClient(private val settings: AppSettings) {
 
         return """
             <s:Header>
-              <Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+              <Security s:mustUnderstand="1" xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
                 <UsernameToken>
                   <Username>$escapedUser</Username>
                   <Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">$digestB64</Password>
