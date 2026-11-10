@@ -7,9 +7,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -17,6 +18,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.imou.youtubestreamer.ui.MainViewModel
 import com.imou.youtubestreamer.ui.theme.*
 import com.imou.youtubestreamer.update.AppUpdateManager
@@ -28,6 +32,19 @@ fun AppUpdateDialog(
     viewModel: MainViewModel
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var canInstall by remember(status) { mutableStateOf(AppUpdateManager.canInstallPackages(context)) }
+
+    // Refresh unknown-sources permission immediately when returning from Android Settings
+    DisposableEffect(lifecycleOwner, status) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                canInstall = AppUpdateManager.canInstallPackages(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     when (status) {
         is UpdateStatus.UpdateAvailable -> {
@@ -80,11 +97,20 @@ fun AppUpdateDialog(
                                 lineHeight = 18.sp
                             )
                         }
+
+                        TextButton(
+                            onClick = { AppUpdateManager.openDownloadInBrowser(context, status.downloadUrl) },
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Or Download in Browser", fontSize = 12.sp, color = LiveCyan)
+                        }
                     }
                 },
                 confirmButton = {
                     Button(
-                        onClick = { viewModel.downloadAndInstallUpdate(context, status.downloadUrl) },
+                        onClick = { viewModel.downloadAndInstallUpdate(context, status.downloadUrl, status.latestVersion) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -113,7 +139,7 @@ fun AppUpdateDialog(
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         val progress = status.progress
-                        if (progress > 0) {
+                        if (progress > 0f && status.totalBytes > 0L) {
                             LinearProgressIndicator(
                                 progress = { progress },
                                 modifier = Modifier.fillMaxWidth(),
@@ -133,7 +159,12 @@ fun AppUpdateDialog(
                                 color = LiveCyan,
                                 trackColor = DarkBorder
                             )
-                            Text("Connecting to GitHub...", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                            val mbDownloaded = status.bytesDownloaded / (1024f * 1024f)
+                            Text(
+                                text = if (mbDownloaded > 0.1f) "Downloading %.1f MB...".format(mbDownloaded) else "Connecting to GitHub...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
                         }
                     }
                 },
@@ -143,7 +174,6 @@ fun AppUpdateDialog(
         }
 
         is UpdateStatus.ReadyToInstall -> {
-            val canInstall = AppUpdateManager.canInstallPackages(context)
             AlertDialog(
                 onDismissRequest = { viewModel.dismissUpdateDialog() },
                 title = {
@@ -162,10 +192,20 @@ fun AppUpdateDialog(
                         )
                         if (!canInstall) {
                             Text(
-                                text = "Permission needed: Please enable 'Install unknown apps' for Surveillance to complete installation.",
+                                text = "Permission needed: Tap Grant Permission below, enable 'Allow from this source', then return here to tap Install Now.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = WarningAmber
                             )
+                        }
+                        if (status.downloadUrl.isNotBlank()) {
+                            TextButton(
+                                onClick = { AppUpdateManager.openDownloadInBrowser(context, status.downloadUrl) },
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Or Install via Browser", fontSize = 12.sp, color = LiveCyan)
+                            }
                         }
                     }
                 },
@@ -173,7 +213,7 @@ fun AppUpdateDialog(
                     Button(
                         onClick = {
                             if (canInstall) {
-                                viewModel.installDownloadedApk(context, status.apkFile)
+                                viewModel.installDownloadedApk(context, status.apkFile, status.downloadUrl)
                             } else {
                                 AppUpdateManager.openInstallPermissionSettings(context)
                             }
@@ -204,19 +244,29 @@ fun AppUpdateDialog(
                     }
                 },
                 text = {
-                    Text(
-                        text = status.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextPrimary
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = status.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextPrimary
+                        )
+                    }
                 },
                 confirmButton = {
                     Button(
-                        onClick = { viewModel.dismissUpdateDialog() },
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant, contentColor = TextPrimary),
+                        onClick = {
+                            AppUpdateManager.openDownloadInBrowser(context, status.fallbackUrl)
+                            viewModel.dismissUpdateDialog()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("Dismiss")
+                        Text("Download in Browser", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissUpdateDialog() }) {
+                        Text("Dismiss", color = TextMuted)
                     }
                 },
                 containerColor = DarkSurface

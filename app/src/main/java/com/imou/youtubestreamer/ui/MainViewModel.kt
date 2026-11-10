@@ -45,9 +45,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _manualCheckMessage = MutableStateFlow<String?>(null)
     val manualCheckMessage: StateFlow<String?> = _manualCheckMessage.asStateFlow()
 
-    fun checkForUpdates(context: Context, manual: Boolean = false) {
+    fun checkForUpdates(context: Context = getApplication(), manual: Boolean = false) {
+        val appCtx = context.applicationContext
         viewModelScope.launch {
-            val result = AppUpdateManager.checkForUpdates(context)
+            val result = AppUpdateManager.checkForUpdates(appCtx)
             if (manual) {
                 when (result) {
                     is UpdateStatus.UpToDate -> {
@@ -56,7 +57,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     is UpdateStatus.Error -> {
                         _manualCheckMessage.value = "Check failed: ${result.message}"
                     }
-                    is UpdateStatus.UpdateAvailable -> {
+                    is UpdateStatus.UpdateAvailable, is UpdateStatus.ReadyToInstall -> {
                         _manualCheckMessage.value = null
                     }
                     else -> {}
@@ -65,21 +66,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun downloadAndInstallUpdate(context: Context, downloadUrl: String) {
+    fun downloadAndInstallUpdate(
+        context: Context,
+        downloadUrl: String,
+        targetVersion: String = "latest"
+    ) {
+        val appCtx = context.applicationContext
         viewModelScope.launch {
-            val result = AppUpdateManager.downloadUpdate(context, downloadUrl)
+            val result = AppUpdateManager.downloadUpdate(appCtx, downloadUrl, targetVersion)
             if (result.isSuccess) {
                 val apkFile = result.getOrThrow()
-                if (AppUpdateManager.canInstallPackages(context)) {
-                    AppUpdateManager.installApk(context, apkFile)
+                if (AppUpdateManager.canInstallPackages(appCtx)) {
+                    AppUpdateManager.installApk(context, apkFile, downloadUrl)
                 }
             }
         }
     }
 
-    fun installDownloadedApk(context: Context, apkFile: File) {
+    fun installDownloadedApk(context: Context, apkFile: File, fallbackUrl: String = "") {
         if (AppUpdateManager.canInstallPackages(context)) {
-            AppUpdateManager.installApk(context, apkFile)
+            AppUpdateManager.installApk(context, apkFile, fallbackUrl)
         } else {
             AppUpdateManager.openInstallPermissionSettings(context)
         }

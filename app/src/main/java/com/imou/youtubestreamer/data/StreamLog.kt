@@ -26,13 +26,13 @@ object AppLogger {
     private const val MAX_LOGS = 300
 
     fun log(level: LogLevel, tag: String, message: String) {
-        val entry = LogEntry(
-            timestamp = timeFormat.format(Date()),
-            level = level,
-            tag = tag,
-            message = message
-        )
         synchronized(this) {
+            val entry = LogEntry(
+                timestamp = timeFormat.format(Date()),
+                level = level,
+                tag = tag,
+                message = message
+            )
             val current = _logs.value.toMutableList()
             if (current.size >= MAX_LOGS) {
                 current.removeAt(0)

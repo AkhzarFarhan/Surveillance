@@ -459,10 +459,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     }
                 }
 
-                if (manualCheckMsg != null) {
+                manualCheckMsg?.let { msg ->
                     Text(
-                        text = manualCheckMsg ?: "",
-                        color = if (manualCheckMsg!!.contains("latest", ignoreCase = true)) SurveillanceGreen else WarningAmber,
+                        text = msg,
+                        color = if (msg.contains("latest", ignoreCase = true)) SurveillanceGreen else WarningAmber,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium
                     )

@@ -4,9 +4,12 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
-import com.imou.youtubestreamer.data.AppSettings
 import com.imou.youtubestreamer.data.AppLogger
+import com.imou.youtubestreamer.data.AppSettings
 import com.imou.youtubestreamer.service.CctvStreamingService
+import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 
 class SurveillanceApp : Application() {
 
@@ -17,7 +20,38 @@ class SurveillanceApp : Application() {
         super.onCreate()
         settings = AppSettings(this)
         AppLogger.i("SurveillanceApp", "Application initialized.")
+        replayPreviousCrashIfAny()
+        installCrashRecorder()
         createNotificationChannels()
+    }
+
+    private fun replayPreviousCrashIfAny() {
+        try {
+            val crashFile = File(filesDir, "last_crash.txt")
+            if (crashFile.exists()) {
+                val trace = crashFile.readText().trim()
+                if (trace.isNotEmpty()) {
+                    AppLogger.e("LastCrash", trace)
+                }
+                crashFile.delete()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun installCrashRecorder() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val sw = StringWriter()
+                throwable.printStackTrace(PrintWriter(sw))
+                File(filesDir, "last_crash.txt").writeText(
+                    "Thread: ${thread.name}\n${sw.toString().take(3500)}"
+                )
+            } catch (_: Exception) {
+            }
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
     }
 
     private fun createNotificationChannels() {
