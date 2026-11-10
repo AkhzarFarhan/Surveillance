@@ -114,20 +114,28 @@ class DahuaSdCardSyncManager(
         val startRtsp = rtspTimeFormat.format(Date(startTimeMs))
         val endRtsp = rtspTimeFormat.format(Date(endTimeMs))
 
-        val playbackRtspUrl = "rtsp://${settings.username}:${settings.safetyCode}@${settings.cameraIp}:${settings.rtspPort}/cam/playback?channel=$channel&starttime=$startRtsp&endtime=$endRtsp"
+        val playbackRtspUrl = settings.buildPlaybackRtspUrl(channel, startRtsp, endRtsp)
+        val onvifClient = OnvifCameraClient(settings)
+        val probe = onvifClient.testRtspDescribe(channel, settings.streamSubtype)
+        val videoCodecArgs = if (probe.videoCodec == "H265" || probe.videoCodec == "HEVC") {
+            arrayOf("-c:v", "libopenh264", "-b:v", "1500k", "-g", "28", "-pix_fmt", "yuv420p")
+        } else {
+            arrayOf("-c:v", "copy")
+        }
+
         AppLogger.i("SdCardSync", "Streaming SD backlog for Channel $channel ($lensCode) at ${settings.catchupSpeed}x speed...")
 
-        val cmd = arrayOf(
+        val cmd = (arrayOf(
             "-hide_banner", "-loglevel", "warning",
             "-readrate", "${settings.catchupSpeed}",
             "-rtsp_transport", "tcp",
             "-i", playbackRtspUrl,
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-map", "0:v", "-map", "1:a",
-            "-c:v", "copy",
+            "-map", "0:v", "-map", "1:a"
+        ) + videoCodecArgs + arrayOf(
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
             "-f", "flv", rtmpTarget
-        ).joinToString(" ")
+        )).joinToString(" ")
 
         val session = FFmpegKit.execute(cmd)
         val returnCode = session.returnCode

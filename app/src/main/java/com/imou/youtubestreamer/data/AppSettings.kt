@@ -49,6 +49,35 @@ class AppSettings(context: Context) {
         get() = prefs.getString(KEY_SAFETY_CODE, "") ?: ""
         set(value) = prefs.edit().putString(KEY_SAFETY_CODE, value.trim()).apply()
 
+    /**
+     * Builds an RTSP live-monitoring URL with percent-encoded userinfo so passwords
+     * containing '@' (e.g. "767325@Nz") or special characters parse cleanly in FFmpeg.
+     */
+    fun buildLiveRtspUrl(channel: Int, subtype: Int = streamSubtype): String {
+        val userEnc = encodeUrlComponent(username)
+        val passEnc = encodeUrlComponent(safetyCode)
+        return "rtsp://$userEnc:$passEnc@$cameraIp:$rtspPort/cam/realmonitor?channel=$channel&subtype=$subtype"
+    }
+
+    /**
+     * Builds an RTSP MicroSD playback URL including the required subtype query parameter
+     * and percent-encoded credentials.
+     */
+    fun buildPlaybackRtspUrl(
+        channel: Int,
+        startTimeStr: String,
+        endTimeStr: String,
+        subtype: Int = streamSubtype
+    ): String {
+        val userEnc = encodeUrlComponent(username)
+        val passEnc = encodeUrlComponent(safetyCode)
+        return "rtsp://$userEnc:$passEnc@$cameraIp:$rtspPort/cam/playback?channel=$channel&subtype=$subtype&starttime=$startTimeStr&endtime=$endTimeStr"
+    }
+
+    private fun encodeUrlComponent(value: String): String {
+        return java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+    }
+
     var fixedChannel: Int
         get() = prefs.getInt(KEY_FIXED_CHANNEL, 2)
         set(value) = prefs.edit().putInt(KEY_FIXED_CHANNEL, value).apply()

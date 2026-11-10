@@ -7,6 +7,7 @@ import com.arthenica.ffmpegkit.ReturnCode
 import com.imou.youtubestreamer.data.AppSettings
 import com.imou.youtubestreamer.data.AppLogger
 import com.imou.youtubestreamer.data.LensStreamState
+import com.imou.youtubestreamer.sync.OnvifCameraClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +35,8 @@ class DualStreamOrchestrator(
     private var fixedStartTime = 0L
     private var rotatableStartTime = 0L
 
+    private val onvifClient = OnvifCameraClient(settings)
+
     private val _fixedState = MutableStateFlow(
         LensStreamState("Fixed Overview", "_F", settings.fixedChannel)
     )
@@ -45,7 +48,7 @@ class DualStreamOrchestrator(
     val rotatableState: StateFlow<LensStreamState> = _rotatableState.asStateFlow()
 
     fun getRtspUrl(channel: Int): String {
-        return "rtsp://${settings.username}:${settings.safetyCode}@${settings.cameraIp}:${settings.rtspPort}/cam/realmonitor?channel=$channel&subtype=${settings.streamSubtype}"
+        return settings.buildLiveRtspUrl(channel)
     }
 
     /**
@@ -109,7 +112,7 @@ class DualStreamOrchestrator(
         }
     }
 
-    private fun startSingleWorker(
+    private suspend fun startSingleWorker(
         lensCode: String,
         lensName: String,
         channel: Int,
@@ -134,31 +137,60 @@ class DualStreamOrchestrator(
             lastError = null
         )
 
+        // Probe codec first: standard YouTube FLV rejects H.265 copy mode.
+        var useH264Transcode = false
+        val probe = onvifClient.testRtspDescribe(channel, settings.streamSubtype)
+        if (!probe.success && !probe.errorMessage.isNullOrBlank()) {
+            AppLogger.e("DualOrchestrator", "[$lensCode] RTSP pre-check failed: ${probe.errorMessage}")
+            stateFlow.value = stateFlow.value.copy(isStreaming = false, lastError = probe.errorMessage)
+            return
+        }
+
+        if (probe.videoCodec == "H265" || probe.videoCodec == "HEVC") {
+            AppLogger.w("DualOrchestrator", "[$lensCode] Camera stream is H.265; requesting H.264 via ONVIF for zero-CPU YouTube copy...")
+            val switched = onvifClient.switchMainStreamsToH264()
+            if (switched.isSuccess) {
+                delay(600)
+                val recheck = onvifClient.testRtspDescribe(channel, settings.streamSubtype)
+                if (recheck.videoCodec == "H265" || recheck.videoCodec == "HEVC") {
+                    useH264Transcode = true
+                }
+            } else {
+                useH264Transcode = true
+            }
+            if (useH264Transcode) {
+                AppLogger.w("DualOrchestrator", "[$lensCode] Falling back to OpenH264 transcoding because camera remained on H.265.")
+            }
+        }
+
         val cmdParts = mutableListOf(
             "-hide_banner", "-loglevel", "warning",
             "-rtsp_transport", "tcp",
             "-i", rtspSource
         )
 
+        val videoCodecArgs = if (useH264Transcode) {
+            listOf("-c:v", "libopenh264", "-b:v", "1500k", "-maxrate", "2000k", "-bufsize", "3000k", "-g", "28", "-pix_fmt", "yuv420p")
+        } else {
+            listOf("-c:v", "copy")
+        }
+
         if (settings.silentAudioEnabled) {
             // Injects synthetic silent stereo AAC audio (anullsrc)
             cmdParts.addAll(
-                listOf(
-                    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-                    "-map", "0:v", "-map", "1:a",
-                    "-c:v", "copy",
-                    "-c:a", "aac", "-b:a", "128k", "-ar", "44100"
-                )
+                listOf("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", "-map", "0:v", "-map", "1:a") +
+                    videoCodecArgs +
+                    listOf("-c:a", "aac", "-b:a", "128k", "-ar", "44100")
             )
         } else {
-            // Direct stream copy
-            cmdParts.addAll(listOf("-c:v", "copy", "-c:a", "copy"))
+            cmdParts.addAll(videoCodecArgs + listOf("-c:a", "aac", "-b:a", "128k", "-ar", "44100"))
         }
 
         cmdParts.addAll(listOf("-f", "flv", rtmpTarget))
         val fullCmd = cmdParts.joinToString(" ")
+        val sanitizedCmd = fullCmd.replace(Regex("://[^@]+@"), "://***:***@")
 
-        AppLogger.i("DualOrchestrator", "[$lensCode] Starting pipeline: ffmpeg $fullCmd")
+        AppLogger.i("DualOrchestrator", "[$lensCode] Starting pipeline: ffmpeg $sanitizedCmd")
 
         val session = FFmpegKit.executeAsync(
             fullCmd,

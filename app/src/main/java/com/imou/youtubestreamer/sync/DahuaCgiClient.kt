@@ -20,9 +20,22 @@ data class DahuaMediaClip(
 
 class DahuaCgiClient(private val settings: AppSettings) {
 
+    private val onvifClient = OnvifCameraClient(settings)
+
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .addInterceptor(
+            DigestAuthInterceptor(
+                getUsername = { settings.username },
+                getPassword = { settings.safetyCode }
+            )
+        )
+        .build()
+
+    private val cgiProbeClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(2500, TimeUnit.MILLISECONDS)
+        .readTimeout(2500, TimeUnit.MILLISECONDS)
         .addInterceptor(
             DigestAuthInterceptor(
                 getUsername = { settings.username },
@@ -35,26 +48,52 @@ class DahuaCgiClient(private val settings: AppSettings) {
         get() = "http://${settings.cameraIp}:${settings.httpPort}"
 
     /**
-     * Tests connectivity to Dahua CGI with current credentials.
+     * Tests camera connectivity via RTSP Digest (554), ONVIF DeviceService (80), and Dahua CGI.
+     * Consumer Imou cameras (e.g. IPC-S7XE) disable /cgi-bin/ HTTP while exposing ONVIF & RTSP.
      */
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
-        val url = "$baseUrl/cgi-bin/magicBox.cgi?action=getSystemInfo"
-        val request = Request.Builder().url(url).build()
-        try {
-            httpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string().orEmpty()
-                    AppLogger.i("DahuaCGI", "Camera connection successful: ${body.take(120)}")
-                    Result.success(body)
-                } else {
-                    val err = "HTTP ${response.code}: ${response.message}"
-                    AppLogger.w("DahuaCGI", "Connection failed: $err")
-                    Result.failure(Exception(err))
+        val rtspResult = onvifClient.testRtspDescribe(settings.fixedChannel, settings.streamSubtype)
+        val onvifInfo = onvifClient.getDeviceInfo().getOrNull()
+
+        if (rtspResult.success) {
+            val cgiOk = tryQuickCgiCheck()
+            val codec = rtspResult.videoCodec ?: "Unknown"
+            val modelLabel = if (onvifInfo != null) {
+                "${onvifInfo.manufacturer} ${onvifInfo.model} (FW ${onvifInfo.firmwareVersion})"
+            } else {
+                "RTSP Camera at ${settings.cameraIp}"
+            }
+            val protocolNote = buildString {
+                append("Connected! $modelLabel\n")
+                append("• RTSP Port ${settings.rtspPort}: OK (Ch ${settings.fixedChannel}, Codec: $codec)\n")
+                append("• ONVIF Port ${settings.httpPort}: ${if (onvifInfo != null) "OK" else "Unauthenticated/Unavailable"}")
+                if (cgiOk) append(" • HTTP CGI: OK")
+                if (codec == "H265" || codec == "HEVC") {
+                    append("\n⚠ Stream is H.265 — tap 'Switch Camera to H.264' below for YouTube RTMP compatibility.")
                 }
             }
-        } catch (e: Exception) {
-            AppLogger.e("DahuaCGI", "Connection exception: ${e.message}")
-            Result.failure(e)
+            AppLogger.i("CameraTest", protocolNote)
+            return@withContext Result.success(protocolNote)
+        }
+
+        // Fallback check on CGI directly in case RTSP port is blocked/custom
+        if (tryQuickCgiCheck()) {
+            val msg = "HTTP CGI connected at ${settings.cameraIp}:${settings.httpPort}, but RTSP failed: ${rtspResult.errorMessage}"
+            AppLogger.w("CameraTest", msg)
+            return@withContext Result.failure(Exception(msg))
+        }
+
+        val err = rtspResult.errorMessage ?: "Connection failed to ${settings.cameraIp}"
+        AppLogger.e("CameraTest", "Connection failed: $err")
+        Result.failure(Exception(err))
+    }
+
+    private fun tryQuickCgiCheck(): Boolean {
+        return try {
+            val req = Request.Builder().url("$baseUrl/cgi-bin/magicBox.cgi?action=getSystemInfo").build()
+            cgiProbeClient.newCall(req).execute().use { it.isSuccessful }
+        } catch (_: Exception) {
+            false
         }
     }
 

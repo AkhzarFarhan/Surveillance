@@ -126,6 +126,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     value = username,
                     onValueChange = { username = it; settings.username = it },
                     label = { Text("Username") },
+                    supportingText = { Text("Imou / Dahua cameras require 'admin'", color = TextMuted, fontSize = 11.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = SurveillanceGreen,
@@ -137,7 +138,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 OutlinedTextField(
                     value = safetyCode,
                     onValueChange = { safetyCode = it; settings.safetyCode = it },
-                    label = { Text("Device Safety Code (Sticker Password)") },
+                    label = { Text("Device Password / Safety Code") },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
@@ -160,18 +161,30 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 Button(
                     onClick = { viewModel.testCameraConnection() },
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = testState !is CameraTestState.Testing,
                     colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant, contentColor = TextPrimary),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     if (testState is CameraTestState.Testing) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), color = LiveCyan, strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing Connection...")
+                        Text("Testing Camera Connection...")
                     } else {
                         Icon(Icons.Default.NetworkCheck, contentDescription = null, tint = LiveCyan)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Test Camera & MicroSD CGI Connection")
+                        Text("Test Camera Connection (RTSP & ONVIF)")
                     }
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.switchCameraToH264() },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = testState !is CameraTestState.Testing,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.VideoSettings, contentDescription = null, tint = SurveillanceGreen, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Configure Camera Streams for YouTube (H.264)", color = SurveillanceGreen, fontSize = 12.sp)
                 }
 
                 when (val state = testState) {

@@ -10,6 +10,7 @@ import com.imou.youtubestreamer.data.SystemStreamState
 import com.imou.youtubestreamer.service.CctvStreamingService
 import com.imou.youtubestreamer.sync.DahuaCgiClient
 import com.imou.youtubestreamer.sync.DahuaSdCardSyncManager
+import com.imou.youtubestreamer.sync.OnvifCameraClient
 import com.imou.youtubestreamer.update.AppUpdateManager
 import com.imou.youtubestreamer.update.UpdateStatus
 import android.content.Context
@@ -30,6 +31,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val settings = AppSettings(application)
     private val cgiClient = DahuaCgiClient(settings)
+    private val onvifClient = OnvifCameraClient(settings)
     private val syncManager = DahuaSdCardSyncManager(application, settings)
 
     val systemState: StateFlow<SystemStreamState> = CctvStreamingService.systemState
@@ -111,9 +113,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _cameraTestState.value = CameraTestState.Testing
             val result = cgiClient.testConnection()
             if (result.isSuccess) {
-                _cameraTestState.value = CameraTestState.Success("Connected! Dahua CGI responded successfully.")
+                _cameraTestState.value = CameraTestState.Success(result.getOrNull() ?: "Connected successfully!")
             } else {
                 _cameraTestState.value = CameraTestState.Error(result.exceptionOrNull()?.message ?: "Connection failed")
+            }
+        }
+    }
+
+    fun switchCameraToH264() {
+        viewModelScope.launch {
+            _cameraTestState.value = CameraTestState.Testing
+            val result = onvifClient.switchMainStreamsToH264()
+            if (result.isSuccess) {
+                _cameraTestState.value = CameraTestState.Success(result.getOrNull() ?: "Camera switched to H.264!")
+            } else {
+                _cameraTestState.value = CameraTestState.Error(result.exceptionOrNull()?.message ?: "Failed to switch codec")
             }
         }
     }
@@ -131,8 +145,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             syncManager.syncMissingFootageTillNow(
                 startTimeMs = start,
                 endTimeMs = now,
-                rtmpTargetFixed = settings.manualRtmpFixed,
-                rtmpTargetRotatable = settings.manualRtmpRotatable
+                rtmpTargetFixed = settings.getFormattedFixedRtmp(),
+                rtmpTargetRotatable = settings.getFormattedRotatableRtmp()
             )
         }
     }
