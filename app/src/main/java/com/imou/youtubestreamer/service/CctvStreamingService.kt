@@ -10,6 +10,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
@@ -149,16 +151,16 @@ class CctvStreamingService : LifecycleService() {
         AppLogger.enter(TAG, "promoteToForeground", "title='$title', text='$text', SDK=${Build.VERSION.SDK_INT}")
         try {
             val notification = buildNotification(title, text)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 )
-                AppLogger.exit(TAG, "promoteToForeground", "Started foreground with FOREGROUND_SERVICE_TYPE_DATA_SYNC")
+                AppLogger.exit(TAG, "promoteToForeground", "Started foreground with FOREGROUND_SERVICE_TYPE_SPECIAL_USE")
             } else {
                 startForeground(NOTIFICATION_ID, notification)
-                AppLogger.exit(TAG, "promoteToForeground", "Started foreground (legacy 2-arg)")
+                AppLogger.exit(TAG, "promoteToForeground", "Started foreground (2-arg)")
             }
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "promoteToForeground", t, "Fallback to 2-arg startForeground")
@@ -167,6 +169,36 @@ class CctvStreamingService : LifecycleService() {
             } catch (t2: Throwable) {
                 AppLogger.exception(TAG, "promoteToForeground:fallback", t2)
             }
+        }
+    }
+
+    override fun onTimeout(startId: Int) {
+        AppLogger.unexpected(TAG, "onTimeout(startId=$startId)", "OS signaled foreground service timeout; stopping gracefully and scheduling restart")
+        handleFgsTimeout(startId)
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        AppLogger.unexpected(TAG, "onTimeout(startId=$startId, fgsType=$fgsType)", "OS signaled foreground service timeout; stopping gracefully and scheduling restart")
+        handleFgsTimeout(startId)
+    }
+
+    private fun handleFgsTimeout(startId: Int) {
+        try {
+            val shouldRestart = isRunning
+            val appCtx = applicationContext
+            if (::rotationScheduler.isInitialized) rotationScheduler.stop()
+            if (::streamOrchestrator.isInitialized) streamOrchestrator.stopLiveStreamsGracefully()
+            isRunning = false
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(startId)
+            if (shouldRestart) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    AppLogger.i(TAG, "Re-launching CctvStreamingService after OS timeout cycle...")
+                    start(appCtx)
+                }, 2000L)
+            }
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "handleFgsTimeout", t)
         }
     }
 

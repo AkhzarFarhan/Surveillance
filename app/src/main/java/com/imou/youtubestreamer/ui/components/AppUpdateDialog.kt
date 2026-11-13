@@ -25,6 +25,7 @@ import com.imou.youtubestreamer.ui.MainViewModel
 import com.imou.youtubestreamer.ui.theme.*
 import com.imou.youtubestreamer.update.AppUpdateManager
 import com.imou.youtubestreamer.update.UpdateStatus
+import java.util.Locale
 
 @Composable
 fun AppUpdateDialog(
@@ -67,7 +68,7 @@ fun AppUpdateDialog(
                         if (status.apkSize > 0) {
                             val sizeMb = status.apkSize / (1024f * 1024f)
                             Text(
-                                text = "Download Size: %.1f MB".format(sizeMb),
+                                text = String.format(Locale.US, "Download Size: %.1f MB", sizeMb),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = LiveCyan,
                                 fontWeight = FontWeight.Medium
@@ -148,8 +149,9 @@ fun AppUpdateDialog(
                             )
                             val mbDownloaded = status.bytesDownloaded / (1024f * 1024f)
                             val mbTotal = status.totalBytes / (1024f * 1024f)
+                            val pct = (progress * 100).toInt().coerceIn(0, 100)
                             Text(
-                                text = "${(progress * 100).toInt()}% • %.1f MB / %.1f MB".format(mbDownloaded, mbTotal),
+                                text = String.format(Locale.US, "%d%% • %.1f MB / %.1f MB", pct, mbDownloaded, mbTotal),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
@@ -161,7 +163,7 @@ fun AppUpdateDialog(
                             )
                             val mbDownloaded = status.bytesDownloaded / (1024f * 1024f)
                             Text(
-                                text = if (mbDownloaded > 0.1f) "Downloading %.1f MB...".format(mbDownloaded) else "Connecting to GitHub...",
+                                text = if (mbDownloaded > 0.1f) String.format(Locale.US, "Downloading %.1f MB...", mbDownloaded) else "Connecting to GitHub...",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
