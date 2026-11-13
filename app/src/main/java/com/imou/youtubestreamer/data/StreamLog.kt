@@ -106,13 +106,22 @@ object AppLogger {
         timeFormat.format(Date())
     }
 
+    private fun sanitizeSecrets(text: String): String {
+        var clean = text.replace(Regex("(rtsp://)([^:@\\s]+):([^@\\s]+)@"), "$1***:***@")
+        clean = clean.replace(Regex("(rtmps?://[^/\\s]+/live2/)([^\\s:]+)")) { match ->
+            "${match.groupValues[1]}${maskSecret(match.groupValues[2])}"
+        }
+        return clean
+    }
+
     fun log(level: LogLevel, tag: String, message: String) {
         val ts = formatNow()
+        val safeMessage = sanitizeSecrets(message)
         val entry = LogEntry(
             timestamp = ts,
             level = level,
             tag = tag,
-            message = message
+            message = safeMessage
         )
 
         synchronized(this) {
@@ -125,7 +134,7 @@ object AppLogger {
 
             persistentLogFile?.let { file ->
                 try {
-                    val sanitizedMsg = message.replace("\r\n", " ⏎ ").replace("\n", " ⏎ ")
+                    val sanitizedMsg = safeMessage.replace("\r\n", " ⏎ ").replace("\n", " ⏎ ")
                     val rawLine = "[$ts][$level][$tag] $sanitizedMsg\n"
                     FileOutputStream(file, true).use { fos ->
                         fos.write(rawLine.toByteArray(Charsets.UTF_8))
@@ -137,11 +146,11 @@ object AppLogger {
         }
 
         when (level) {
-            LogLevel.DEBUG -> android.util.Log.d(tag, message)
-            LogLevel.INFO -> android.util.Log.i(tag, message)
-            LogLevel.WARN -> android.util.Log.w(tag, message)
-            LogLevel.ERROR -> android.util.Log.e(tag, message)
-            LogLevel.FFMPEG -> android.util.Log.v(tag, message)
+            LogLevel.DEBUG -> android.util.Log.d(tag, safeMessage)
+            LogLevel.INFO -> android.util.Log.i(tag, safeMessage)
+            LogLevel.WARN -> android.util.Log.w(tag, safeMessage)
+            LogLevel.ERROR -> android.util.Log.e(tag, safeMessage)
+            LogLevel.FFMPEG -> android.util.Log.v(tag, safeMessage)
         }
     }
 

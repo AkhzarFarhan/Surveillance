@@ -114,23 +114,21 @@ class AppSettings(context: Context) {
         get() = prefs.getString(KEY_MANUAL_RTMP_ROTATABLE, "") ?: ""
         set(value) = prefs.edit().putString(KEY_MANUAL_RTMP_ROTATABLE, value.trim()).apply()
 
-    fun getFormattedFixedRtmp(): String {
-        val target = manualRtmpFixed.trim()
-        if (target.isBlank()) return ""
-        return if (target.startsWith("rtmp://") || target.startsWith("rtmps://")) {
-            target
-        } else {
-            "rtmps://a.rtmp.youtube.com/live2/$target"
-        }
-    }
+    fun getFormattedFixedRtmp(): String = formatRtmpTarget(manualRtmpFixed)
 
-    fun getFormattedRotatableRtmp(): String {
-        val target = manualRtmpRotatable.trim()
+    fun getFormattedRotatableRtmp(): String = formatRtmpTarget(manualRtmpRotatable)
+
+    private fun formatRtmpTarget(raw: String): String {
+        val target = raw.trim()
         if (target.isBlank()) return ""
-        return if (target.startsWith("rtmp://") || target.startsWith("rtmps://")) {
-            target
-        } else {
-            "rtmps://a.rtmp.youtube.com/live2/$target"
+        return when {
+            // YouTube's TLS ingest certificate is issued for *.rtmps.youtube.com, not a.rtmp.youtube.com
+            target.startsWith("rtmps://a.rtmp.youtube.com/", ignoreCase = true) ->
+                "rtmps://a.rtmps.youtube.com/" + target.substringAfter("rtmps://a.rtmp.youtube.com/")
+            target.startsWith("rtmp://", ignoreCase = true) || target.startsWith("rtmps://", ignoreCase = true) ->
+                target
+            else ->
+                "rtmps://a.rtmps.youtube.com/live2/$target"
         }
     }
 

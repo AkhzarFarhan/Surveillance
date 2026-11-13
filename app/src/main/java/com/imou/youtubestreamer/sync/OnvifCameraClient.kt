@@ -60,12 +60,21 @@ class OnvifCameraClient(private val settings: AppSettings) {
     suspend fun testRtspDescribe(
         channel: Int = settings.fixedChannel,
         subtype: Int = settings.streamSubtype
-    ): RtspProbeResult = withContext(Dispatchers.IO) {
+    ): RtspProbeResult {
         val uri = "rtsp://${settings.cameraIp}:${settings.rtspPort}/cam/realmonitor?channel=$channel&subtype=$subtype"
+        return testRtspDescribeUrl(uri)
+    }
+
+    /**
+     * Tests RTSP DESCRIBE against an arbitrary RTSP URI (live `/cam/realmonitor` or MicroSD `/cam/playback`)
+     * using RFC 2069/2617 MD5 Digest authentication.
+     */
+    suspend fun testRtspDescribeUrl(uri: String): RtspProbeResult = withContext(Dispatchers.IO) {
+        val safeUri = uri.replace(Regex("://[^@]+@"), "://***:***@")
         AppLogger.enter(
             TAG,
             "testRtspDescribe",
-            "uri='$uri', user='${settings.username}', pass=${AppLogger.maskSecret(settings.safetyCode)}"
+            "uri='$safeUri', user='${settings.username}', pass=${AppLogger.maskSecret(settings.safetyCode)}"
         )
         var socket: Socket? = null
         try {
@@ -155,7 +164,7 @@ class OnvifCameraClient(private val settings: AppSettings) {
             AppLogger.exit(TAG, "testRtspDescribe", res)
             return@withContext res
         } catch (t: Throwable) {
-            AppLogger.exception(TAG, "testRtspDescribe", t, "uri=$uri")
+            AppLogger.exception(TAG, "testRtspDescribe", t, "uri=$safeUri")
             val res = RtspProbeResult(
                 success = false,
                 statusCode = -1,
