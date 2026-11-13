@@ -11,8 +11,6 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ListAlt
-import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,15 +23,16 @@ import com.imou.youtubestreamer.ui.components.AppUpdateDialog
 import com.imou.youtubestreamer.ui.screens.DashboardScreen
 import com.imou.youtubestreamer.ui.screens.LogsScreen
 import com.imou.youtubestreamer.ui.screens.SettingsScreen
+import com.imou.youtubestreamer.ui.theme.AppIcons
 import com.imou.youtubestreamer.ui.theme.DarkSurface
 import com.imou.youtubestreamer.ui.theme.SurveillanceGreen
 import com.imou.youtubestreamer.ui.theme.SurveillanceTheme
 import com.imou.youtubestreamer.ui.theme.TextMuted
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
+    object Dashboard : Screen("dashboard", "Dashboard", AppIcons.Dashboard)
     object Settings : Screen("settings", "Settings", Icons.Default.Settings)
-    object Logs : Screen("logs", "Diagnostics", Icons.AutoMirrored.Filled.ListAlt)
+    object Logs : Screen("logs", "Diagnostics", AppIcons.ListAlt)
 }
 
 class MainActivity : ComponentActivity() {

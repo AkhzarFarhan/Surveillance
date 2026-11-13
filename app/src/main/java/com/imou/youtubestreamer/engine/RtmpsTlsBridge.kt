@@ -9,6 +9,8 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.SNIHostName
@@ -51,18 +53,31 @@ class RtmpsTlsBridge private constructor(
     @Volatile
     private var activeRemote: SSLSocket? = null
 
+    private val readyLatch = CountDownLatch(1)
+
     private val acceptThread: Thread = Thread({
-        AppLogger.step(tag, "RtmpsTlsBridge.accept", "Loopback listener ready at 127.0.0.1:${serverSocket.localPort} -> $remoteHost:$remotePort")
+        AppLogger.step(
+            tag,
+            "RtmpsTlsBridge.accept",
+            "Loopback listener bound to ${serverSocket.inetAddress?.hostAddress}:${serverSocket.localPort} -> $remoteHost:$remotePort"
+        )
+        readyLatch.countDown()
         while (!closed.get() && !serverSocket.isClosed) {
             try {
                 val local = serverSocket.accept()
                 val connId = connectionCount.incrementAndGet()
                 local.tcpNoDelay = true
+                local.keepAlive = true
                 activeLocal = local
-                AppLogger.step(tag, "RtmpsTlsBridge.conn#$connId", "FFmpeg connected to loopback; opening TLS to $remoteHost:$remotePort...")
-                handleConnection(connId, local)
+                AppLogger.step(tag, "RtmpsTlsBridge.conn#$connId", "FFmpeg connected from ${local.remoteSocketAddress}; opening TLS to $remoteHost:$remotePort...")
+                Thread({
+                    handleConnection(connId, local)
+                }, "RtmpsConn-$tag-$connId").apply {
+                    isDaemon = true
+                    start()
+                }
             } catch (t: Throwable) {
-                if (!closed.get()) {
+                if (!closed.get() && !serverSocket.isClosed) {
                     lastError = "${t::class.java.simpleName}: ${t.message}"
                     AppLogger.exception(tag, "RtmpsTlsBridge.accept", t)
                 }
@@ -72,6 +87,13 @@ class RtmpsTlsBridge private constructor(
     }, "RtmpsBridge-$tag").apply {
         isDaemon = true
         start()
+    }
+
+    fun awaitReady() {
+        try {
+            readyLatch.await(1, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+        }
     }
 
     private fun handleConnection(connId: Long, local: Socket) {
@@ -223,12 +245,24 @@ class RtmpsTlsBridge private constructor(
             val portPart = if (port != 443) ":$port" else ""
             val tcUrl = "rtmps://$host$portPart$appPath"
 
-            val serverSocket = ServerSocket(0, 4, InetAddress.getLoopbackAddress())
+            // CRITICAL: On Android (Inet6AddressImpl), InetAddress.getLoopbackAddress() returns IPv6 ::1!
+            // Binding a ServerSocket to ::1 causes IPv4 connections to 127.0.0.1:<port> to fail with
+            // ECONNREFUSED ("Connection refused"). Always bind explicitly to IPv4 127.0.0.1.
+            val ipv4Loopback = InetAddress.getByAddress("127.0.0.1", byteArrayOf(127, 0, 0, 1))
+            val serverSocket = ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(ipv4Loopback, 0), 32)
+            }
             val bridge = RtmpsTlsBridge(tag = tag, remoteHost = host, remotePort = port, serverSocket = serverSocket)
+            bridge.awaitReady()
             val localUrl = "rtmp://127.0.0.1:${serverSocket.localPort}$fullPath"
 
-            AppLogger.step(tag, "RtmpsTlsBridge.prepare", "Bridge open on 127.0.0.1:${serverSocket.localPort} -> $host:$port, tcUrl='$tcUrl'")
-            AppLogger.exit(tag, "RtmpsTlsBridge.prepare", "Bridged via loopback port ${serverSocket.localPort}")
+            AppLogger.step(
+                tag,
+                "RtmpsTlsBridge.prepare",
+                "Bridge listening on ${serverSocket.inetAddress.hostAddress}:${serverSocket.localPort} -> $host:$port, tcUrl='$tcUrl'"
+            )
+            AppLogger.exit(tag, "RtmpsTlsBridge.prepare", "Bridged via IPv4 loopback port ${serverSocket.localPort}")
             return PreparedRtmpTarget(ffmpegUrl = localUrl, tcUrl = tcUrl, bridge = bridge)
         }
     }

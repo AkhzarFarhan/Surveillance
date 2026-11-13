@@ -16,8 +16,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -71,7 +71,7 @@ fun DashboardScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.BatteryAlert, contentDescription = null, tint = WarningAmber)
+                    Icon(AppIcons.BatteryAlert, contentDescription = null, tint = WarningAmber)
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -129,7 +129,7 @@ fun DashboardScreen(
                 onDismissRequest = { showStreamKeyDialog = false },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.VpnKey, contentDescription = null, tint = LiveCyan)
+                        Icon(AppIcons.VpnKey, contentDescription = null, tint = LiveCyan)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text("YouTube Stream Keys")
                     }
@@ -156,7 +156,7 @@ fun DashboardScreen(
                                         tempFixed = text.toString().trim()
                                     }
                                 }) {
-                                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
+                                    Icon(AppIcons.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
                                 }
                             }
                         )
@@ -175,7 +175,7 @@ fun DashboardScreen(
                                         tempRotatable = text.toString().trim()
                                     }
                                 }) {
-                                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
+                                    Icon(AppIcons.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
                                 }
                             }
                         )
@@ -189,7 +189,7 @@ fun DashboardScreen(
                             },
                             modifier = Modifier.align(Alignment.End)
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
+                            Icon(AppIcons.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Open YouTube Studio", fontSize = 12.sp, color = LiveCyan)
                         }
@@ -289,7 +289,7 @@ fun DashboardScreen(
             shape = RoundedCornerShape(12.dp)
         ) {
             Icon(
-                if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                if (isRunning) AppIcons.Stop else Icons.Default.PlayArrow,
                 contentDescription = null
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -305,7 +305,7 @@ fun DashboardScreen(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Icon(Icons.Default.CloudSync, contentDescription = null, tint = LiveCyan)
+            Icon(AppIcons.CloudSync, contentDescription = null, tint = LiveCyan)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Sync Past 1 Hour SD Footage Now", color = LiveCyan)
         }
@@ -342,7 +342,7 @@ fun YouTubeStreamKeyCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Icon(
-                        if (hasStreamKey) Icons.Default.CheckCircle else Icons.Default.VpnKey,
+                        if (hasStreamKey) Icons.Default.CheckCircle else AppIcons.VpnKey,
                         contentDescription = null,
                         tint = if (hasStreamKey) SurveillanceGreen else WarningAmber,
                         modifier = Modifier.size(26.dp)
@@ -404,7 +404,7 @@ fun YouTubeStreamKeyCard(
                                     quickInput = text.toString().trim()
                                 }
                             }) {
-                                Icon(Icons.Default.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
+                                Icon(AppIcons.ContentPaste, contentDescription = "Paste", tint = LiveCyan)
                             }
                         }
                     )
@@ -428,7 +428,7 @@ fun YouTubeStreamKeyCard(
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = onOpenYouTubeStudio) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp), tint = LiveCyan)
+                        Icon(AppIcons.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp), tint = LiveCyan)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Get Key from YouTube Studio", fontSize = 12.sp, color = LiveCyan)
                     }
@@ -484,7 +484,7 @@ fun PipelineStatusCard(systemState: SystemStreamState) {
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Icon(
-                        if (systemState.isWifiConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
+                        if (systemState.isWifiConnected) AppIcons.Wifi else AppIcons.WifiOff,
                         contentDescription = null,
                         tint = if (systemState.isWifiConnected) SurveillanceGreen else DangerRed,
                         modifier = Modifier.size(14.dp)
@@ -579,7 +579,7 @@ fun LensStatusCard(lensState: LensStreamState) {
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        Icons.Default.Videocam,
+                        AppIcons.Videocam,
                         contentDescription = null,
                         tint = if (lensState.isStreaming) SurveillanceGreen else TextMuted
                     )

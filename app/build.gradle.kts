@@ -16,13 +16,13 @@ android {
         val envCode = (System.getenv("VERSION_CODE") ?: project.findProperty("versionCode")?.toString())?.toIntOrNull()
         val envName = System.getenv("VERSION_NAME") ?: project.findProperty("versionName")?.toString()
 
-        versionCode = envCode ?: 1
-        versionName = envName ?: "1.0.0"
+        versionCode = envCode ?: 15
+        versionName = envName ?: "1.0.14"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -66,6 +66,9 @@ android {
     }
 
     packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += listOf(
                 "/META-INF/{AL2.0,LGPL2.1,DEPENDENCIES}",
@@ -90,7 +93,6 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
 
@@ -103,22 +105,12 @@ dependencies {
     implementation(libs.core.ktx)
     implementation(libs.appcompat)
     implementation(libs.coroutines.android)
-    implementation(libs.coroutines.play.services)
 
     // Security & Encrypted Preferences
     implementation(libs.security.crypto)
 
-    // Google Play Services Auth (1-Tap Google Sign-In)
-    implementation(libs.play.services.auth)
-
-    // Google API Client & YouTube Live Streaming API v3
-    implementation(libs.google.api.client.android)
-    implementation(libs.google.api.services.youtube)
-    implementation(libs.google.http.client.gson)
-
     // OkHttp (Dahua HTTP Digest Authentication & CGI calls)
     implementation(libs.okhttp)
-    implementation(libs.okhttp.logging)
 
     // FFmpeg-Kit for Android (Native RTSP to RTMP streaming engine)
     implementation(libs.ffmpeg.kit.full)

@@ -39,23 +39,50 @@ object AppLogger {
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
+    private val _lastCopiedLogId = MutableStateFlow(0L)
+    val lastCopiedLogId: StateFlow<Long> = _lastCopiedLogId.asStateFlow()
+
     private const val MAX_LOGS = 800
     private const val MAX_LOG_FILE_BYTES = 350 * 1024L
     private const val LOG_FILE_NAME = "surveillance_debug.log"
+    private const val LAST_COPIED_FILE_NAME = "surveillance_last_copied.txt"
 
     @Volatile
     private var persistentLogFile: File? = null
 
+    @Volatile
+    private var lastCopiedMarkerFile: File? = null
+
     fun init(context: Context) {
         synchronized(this) {
             try {
-                val file = File(context.applicationContext.filesDir, LOG_FILE_NAME)
+                val appDir = context.applicationContext.filesDir
+                val file = File(appDir, LOG_FILE_NAME)
+                val markerFile = File(appDir, LAST_COPIED_FILE_NAME)
                 persistentLogFile = file
+                lastCopiedMarkerFile = markerFile
+
+                val savedMarkerLine = if (markerFile.exists()) {
+                    try {
+                        markerFile.readText(Charsets.UTF_8).trim()
+                    } catch (_: Throwable) {
+                        ""
+                    }
+                } else {
+                    ""
+                }
+
                 if (file.exists() && file.length() > 0L) {
                     val lines = file.readLines(Charsets.UTF_8).takeLast(250)
                     val restored = mutableListOf<LogEntry>()
+                    var matchedBookmarkId = 0L
                     for (line in lines) {
-                        parsePersistedLine(line)?.let { restored.add(it) }
+                        parsePersistedLine(line)?.let { entry ->
+                            restored.add(entry)
+                            if (savedMarkerLine.isNotEmpty() && line.trim() == savedMarkerLine) {
+                                matchedBookmarkId = entry.id
+                            }
+                        }
                     }
                     if (restored.isNotEmpty()) {
                         restored.add(
@@ -67,6 +94,9 @@ object AppLogger {
                             )
                         )
                         _logs.value = restored.takeLast(MAX_LOGS)
+                        if (matchedBookmarkId > 0L) {
+                            _lastCopiedLogId.value = matchedBookmarkId
+                        }
                     }
                     if (file.length() > MAX_LOG_FILE_BYTES) {
                         file.writeText(lines.joinToString("\n") + "\n", Charsets.UTF_8)
@@ -74,6 +104,31 @@ object AppLogger {
                 }
             } catch (t: Throwable) {
                 android.util.Log.e("AppLogger", "Failed to initialize persistent log file", t)
+            }
+        }
+    }
+
+    fun formatEntryLine(entry: LogEntry): String {
+        val sanitizedMsg = entry.message.replace("\r\n", " ⏎ ").replace("\n", " ⏎ ")
+        return "[${entry.timestamp}][${entry.level}][${entry.tag}] $sanitizedMsg"
+    }
+
+    fun markLogsCopied(lastEntry: LogEntry) {
+        synchronized(this) {
+            _lastCopiedLogId.value = lastEntry.id
+            try {
+                lastCopiedMarkerFile?.writeText(formatEntryLine(lastEntry), Charsets.UTF_8)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun resetCopyBookmark() {
+        synchronized(this) {
+            _lastCopiedLogId.value = 0L
+            try {
+                lastCopiedMarkerFile?.delete()
+            } catch (_: Throwable) {
             }
         }
     }
@@ -225,8 +280,10 @@ object AppLogger {
     fun clear() {
         synchronized(this) {
             _logs.value = emptyList()
+            _lastCopiedLogId.value = 0L
             try {
                 persistentLogFile?.writeText("", Charsets.UTF_8)
+                lastCopiedMarkerFile?.delete()
             } catch (_: Throwable) {
             }
         }

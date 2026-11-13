@@ -7,7 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -79,7 +79,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     value = cameraIp,
                     onValueChange = { cameraIp = it; settings.cameraIp = it },
                     label = { Text("Camera Local IP Address") },
-                    leadingIcon = { Icon(Icons.Default.Router, contentDescription = null, tint = LiveCyan) },
+                    leadingIcon = { Icon(AppIcons.Router, contentDescription = null, tint = LiveCyan) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = SurveillanceGreen,
@@ -143,7 +143,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
                             Icon(
-                                if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                if (passwordVisible) AppIcons.Visibility else AppIcons.VisibilityOff,
                                 contentDescription = null,
                                 tint = TextMuted
                             )
@@ -170,7 +170,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Testing Camera Connection...")
                     } else {
-                        Icon(Icons.Default.NetworkCheck, contentDescription = null, tint = LiveCyan)
+                        Icon(AppIcons.NetworkCheck, contentDescription = null, tint = LiveCyan)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Test Camera Connection (RTSP & ONVIF)")
                     }
@@ -182,7 +182,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     enabled = testState !is CameraTestState.Testing,
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Icon(Icons.Default.VideoSettings, contentDescription = null, tint = SurveillanceGreen, modifier = Modifier.size(18.dp))
+                    Icon(AppIcons.VideoSettings, contentDescription = null, tint = SurveillanceGreen, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Configure Camera Streams for YouTube (H.264)", color = SurveillanceGreen, fontSize = 12.sp)
                 }
@@ -402,7 +402,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     }
 
                     Icon(
-                        Icons.Default.SystemUpdate,
+                        AppIcons.SystemUpdate,
                         contentDescription = null,
                         tint = LiveCyan,
                         modifier = Modifier.size(28.dp)
@@ -476,7 +476,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Icon(Icons.Default.Save, contentDescription = null)
+            Icon(AppIcons.Save, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(if (hasSavedFeedback) "Settings Saved Successfully!" else "Save & Apply Settings", fontWeight = FontWeight.Bold)
         }

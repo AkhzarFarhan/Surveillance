@@ -5,10 +5,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,7 +49,7 @@ fun AppUpdateDialog(
                 onDismissRequest = { viewModel.dismissUpdateDialog() },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = LiveCyan)
+                        Icon(AppIcons.SystemUpdate, contentDescription = null, tint = LiveCyan)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text("Update Available: v${status.latestVersion}")
                     }
@@ -103,7 +99,7 @@ fun AppUpdateDialog(
                             onClick = { AppUpdateManager.openDownloadInBrowser(context, status.downloadUrl) },
                             contentPadding = PaddingValues(0.dp)
                         ) {
-                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
+                            Icon(AppIcons.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Or Download in Browser", fontSize = 12.sp, color = LiveCyan)
                         }
@@ -132,7 +128,7 @@ fun AppUpdateDialog(
                 onDismissRequest = {},
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = LiveCyan)
+                        Icon(AppIcons.SystemUpdate, contentDescription = null, tint = LiveCyan)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text("Downloading Update...")
                     }
@@ -180,7 +176,7 @@ fun AppUpdateDialog(
                 onDismissRequest = { viewModel.dismissUpdateDialog() },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = SurveillanceGreen)
+                        Icon(AppIcons.SystemUpdate, contentDescription = null, tint = SurveillanceGreen)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text("Update Ready to Install")
                     }
@@ -204,7 +200,7 @@ fun AppUpdateDialog(
                                 onClick = { AppUpdateManager.openDownloadInBrowser(context, status.downloadUrl) },
                                 contentPadding = PaddingValues(0.dp)
                             ) {
-                                Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
+                                Icon(AppIcons.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp), tint = LiveCyan)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Or Install via Browser", fontSize = 12.sp, color = LiveCyan)
                             }
@@ -240,7 +236,7 @@ fun AppUpdateDialog(
                 onDismissRequest = { viewModel.dismissUpdateDialog() },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = DangerRed)
+                        Icon(AppIcons.ErrorOutline, contentDescription = null, tint = DangerRed)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Update Failed")
                     }
