@@ -43,7 +43,8 @@ object AppLogger {
     val lastCopiedLogId: StateFlow<Long> = _lastCopiedLogId.asStateFlow()
 
     private const val MAX_LOGS = 800
-    private const val MAX_LOG_FILE_BYTES = 350 * 1024L
+    private const val MAX_LOG_FILE_BYTES = 5L * 1024L * 1024L // 5 MB per file
+    private const val MAX_LOG_BACKUPS = 2 // 5 MB x 3 files max = 15 MB total cap
     private const val LOG_FILE_NAME = "surveillance_debug.log"
     private const val LAST_COPIED_FILE_NAME = "surveillance_last_copied.txt"
 
@@ -53,6 +54,8 @@ object AppLogger {
     @Volatile
     private var lastCopiedMarkerFile: File? = null
 
+    private var currentFileBytes: Long = 0L
+
     fun init(context: Context) {
         synchronized(this) {
             try {
@@ -61,6 +64,7 @@ object AppLogger {
                 val markerFile = File(appDir, LAST_COPIED_FILE_NAME)
                 persistentLogFile = file
                 lastCopiedMarkerFile = markerFile
+                currentFileBytes = if (file.exists()) file.length() else 0L
 
                 val savedMarkerLine = if (markerFile.exists()) {
                     try {
@@ -73,10 +77,10 @@ object AppLogger {
                 }
 
                 if (file.exists() && file.length() > 0L) {
-                    val lines = file.readLines(Charsets.UTF_8).takeLast(250)
+                    val tailLines = readTailLines(file, 250)
                     val restored = mutableListOf<LogEntry>()
                     var matchedBookmarkId = 0L
-                    for (line in lines) {
+                    for (line in tailLines) {
                         parsePersistedLine(line)?.let { entry ->
                             restored.add(entry)
                             if (savedMarkerLine.isNotEmpty() && line.trim() == savedMarkerLine) {
@@ -98,14 +102,54 @@ object AppLogger {
                             _lastCopiedLogId.value = matchedBookmarkId
                         }
                     }
-                    if (file.length() > MAX_LOG_FILE_BYTES) {
-                        file.writeText(lines.joinToString("\n") + "\n", Charsets.UTF_8)
-                    }
+                    rotateIfNeededLocked(file, 0L)
                 }
             } catch (t: Throwable) {
-                android.util.Log.e("AppLogger", "Failed to initialize persistent log file", t)
+                try {
+                    android.util.Log.e("AppLogger", "Failed to initialize persistent log file", t)
+                } catch (_: Throwable) {
+                }
             }
         }
+    }
+
+    private fun readTailLines(file: File, maxLines: Int): List<String> {
+        // Guard memory in case an existing log is multiple megabytes
+        val len = file.length()
+        if (len <= 512 * 1024L) {
+            return file.readLines(Charsets.UTF_8).takeLast(maxLines)
+        }
+        return try {
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val startOffset = (len - 512 * 1024L).coerceAtLeast(0L)
+                raf.seek(startOffset)
+                val bytes = ByteArray((len - startOffset).toInt())
+                raf.readFully(bytes)
+                val text = String(bytes, Charsets.UTF_8)
+                val lines = text.lines()
+                (if (startOffset > 0L && lines.size > 1) lines.drop(1) else lines).takeLast(maxLines)
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun rotateIfNeededLocked(file: File, incomingBytes: Long) {
+        if (currentFileBytes + incomingBytes <= MAX_LOG_FILE_BYTES) return
+        val parent = file.parentFile ?: return
+        val oldest = File(parent, "$LOG_FILE_NAME.$MAX_LOG_BACKUPS")
+        if (oldest.exists()) oldest.delete()
+        for (idx in (MAX_LOG_BACKUPS - 1) downTo 1) {
+            val src = File(parent, "$LOG_FILE_NAME.$idx")
+            if (src.exists()) {
+                src.renameTo(File(parent, "$LOG_FILE_NAME.${idx + 1}"))
+            }
+        }
+        val firstBackup = File(parent, "$LOG_FILE_NAME.1")
+        if (file.exists()) {
+            file.renameTo(firstBackup)
+        }
+        currentFileBytes = 0L
     }
 
     fun formatEntryLine(entry: LogEntry): String {
@@ -163,7 +207,7 @@ object AppLogger {
 
     private fun sanitizeSecrets(text: String): String {
         var clean = text.replace(Regex("(rtsp://)([^:@\\s]+):([^@\\s]+)@"), "$1***:***@")
-        clean = clean.replace(Regex("(rtmps?://[^/\\s]+/live2/)([^\\s:]+)")) { match ->
+        clean = clean.replace(Regex("(rtmps?://[^/\\s]+/live2/)([^\\s:,\"']+)")) { match ->
             "${match.groupValues[1]}${maskSecret(match.groupValues[2])}"
         }
         return clean
@@ -190,22 +234,28 @@ object AppLogger {
             persistentLogFile?.let { file ->
                 try {
                     val sanitizedMsg = safeMessage.replace("\r\n", " ⏎ ").replace("\n", " ⏎ ")
-                    val rawLine = "[$ts][$level][$tag] $sanitizedMsg\n"
+                    val rawBytes = "[$ts][$level][$tag] $sanitizedMsg\n".toByteArray(Charsets.UTF_8)
+                    rotateIfNeededLocked(file, rawBytes.size.toLong())
                     FileOutputStream(file, true).use { fos ->
-                        fos.write(rawLine.toByteArray(Charsets.UTF_8))
+                        fos.write(rawBytes)
                         fos.flush()
                     }
+                    currentFileBytes += rawBytes.size.toLong()
                 } catch (_: Throwable) {
                 }
             }
         }
 
-        when (level) {
-            LogLevel.DEBUG -> android.util.Log.d(tag, safeMessage)
-            LogLevel.INFO -> android.util.Log.i(tag, safeMessage)
-            LogLevel.WARN -> android.util.Log.w(tag, safeMessage)
-            LogLevel.ERROR -> android.util.Log.e(tag, safeMessage)
-            LogLevel.FFMPEG -> android.util.Log.v(tag, safeMessage)
+        try {
+            when (level) {
+                LogLevel.DEBUG -> android.util.Log.d(tag, safeMessage)
+                LogLevel.INFO -> android.util.Log.i(tag, safeMessage)
+                LogLevel.WARN -> android.util.Log.w(tag, safeMessage)
+                LogLevel.ERROR -> android.util.Log.e(tag, safeMessage)
+                LogLevel.FFMPEG -> android.util.Log.v(tag, safeMessage)
+            }
+        } catch (_: Throwable) {
+            // Safe no-op inside plain JVM unit tests
         }
     }
 
@@ -281,8 +331,17 @@ object AppLogger {
         synchronized(this) {
             _logs.value = emptyList()
             _lastCopiedLogId.value = 0L
+            currentFileBytes = 0L
             try {
-                persistentLogFile?.writeText("", Charsets.UTF_8)
+                persistentLogFile?.let { file ->
+                    file.writeText("", Charsets.UTF_8)
+                    val parent = file.parentFile
+                    if (parent != null) {
+                        for (idx in 1..MAX_LOG_BACKUPS) {
+                            File(parent, "$LOG_FILE_NAME.$idx").delete()
+                        }
+                    }
+                }
                 lastCopiedMarkerFile?.delete()
             } catch (_: Throwable) {
             }

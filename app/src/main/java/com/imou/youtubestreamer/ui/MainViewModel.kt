@@ -8,8 +8,11 @@ import com.imou.youtubestreamer.data.AppLogger
 import com.imou.youtubestreamer.data.AppSettings
 import com.imou.youtubestreamer.data.LogEntry
 import com.imou.youtubestreamer.data.PipelineStatus
+import com.imou.youtubestreamer.data.SettingsValidator
 import com.imou.youtubestreamer.data.SystemStreamState
+import com.imou.youtubestreamer.data.ValidationResult
 import com.imou.youtubestreamer.service.CctvStreamingService
+import com.imou.youtubestreamer.supervisor.SupervisorStore
 import com.imou.youtubestreamer.sync.DahuaCgiClient
 import com.imou.youtubestreamer.sync.DahuaSdCardSyncManager
 import com.imou.youtubestreamer.sync.OnvifCameraClient
@@ -49,6 +52,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _manualCheckMessage = MutableStateFlow<String?>(null)
     val manualCheckMessage: StateFlow<String?> = _manualCheckMessage.asStateFlow()
+
+    private val _cgiCheckMessage = MutableStateFlow<String?>(null)
+    val cgiCheckMessage: StateFlow<String?> = _cgiCheckMessage.asStateFlow()
+
+    private val _cgiChecking = MutableStateFlow(false)
+    val cgiChecking: StateFlow<Boolean> = _cgiChecking.asStateFlow()
 
     fun checkForUpdates(context: Context = getApplication(), manual: Boolean = false) {
         AppLogger.enter(TAG, "checkForUpdates", "manual=$manual")
@@ -126,19 +135,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _manualCheckMessage.value = null
     }
 
-    fun saveStreamKeys(fixedKey: String, rotatableKey: String = "") {
+    fun saveStreamKeys(
+        fixedKey: String,
+        rotatableKey: String = "",
+        fixedBackfillKey: String = settings.backfillRtmpFixed,
+        rotatableBackfillKey: String = settings.backfillRtmpRotatable
+    ): ValidationResult {
         AppLogger.enter(
             TAG,
             "saveStreamKeys",
             "fixedKey=${AppLogger.maskSecret(fixedKey)}, rotatableKey=${AppLogger.maskSecret(rotatableKey)}"
         )
+        val validation = SettingsValidator.validateStreamKeys(
+            fixedLive = fixedKey,
+            rotatableLive = rotatableKey,
+            fixedBackfill = fixedBackfillKey,
+            rotatableBackfill = rotatableBackfillKey,
+            requireAtLeastOneLive = false
+        )
         settings.manualRtmpFixed = fixedKey.trim()
         settings.manualRtmpRotatable = rotatableKey.trim()
+        settings.backfillRtmpFixed = fixedBackfillKey.trim()
+        settings.backfillRtmpRotatable = rotatableBackfillKey.trim()
         AppLogger.i(
             "Settings",
-            "YouTube Stream Key updated (Fixed: ${if (fixedKey.isNotBlank()) "Set" else "Empty"}, Rotatable: ${if (rotatableKey.isNotBlank()) "Set" else "Empty"})"
+            "YouTube Stream Keys updated (Fixed: ${if (fixedKey.isNotBlank()) "Set" else "Empty"}, Rotatable: ${if (rotatableKey.isNotBlank()) "Set" else "Empty"}, valid=${validation.isValid})"
         )
-        AppLogger.exit(TAG, "saveStreamKeys", "Saved")
+        AppLogger.exit(TAG, "saveStreamKeys", "valid=${validation.isValid}")
+        return validation
     }
 
     fun toggleStreaming() {
@@ -159,12 +183,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 CctvStreamingService.stop(app)
                 AppLogger.exit(TAG, "toggleStreaming", "Requested STOP")
             } else {
-                CctvStreamingService.start(app)
+                SupervisorStore(app).clearCrashHistory()
+                CctvStreamingService.start(app, explicit = true)
                 AppLogger.exit(TAG, "toggleStreaming", "Requested START")
             }
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "toggleStreaming", t)
         }
+    }
+
+    fun restartPipeline() {
+        AppLogger.enter(TAG, "restartPipeline")
+        try {
+            val app = getApplication<Application>()
+            SupervisorStore(app).clearCrashHistory()
+            CctvStreamingService.restart(app)
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "restartPipeline", t)
+        }
+    }
+
+    fun clearCrashLoopWarning() {
+        SupervisorStore(getApplication()).clearCrashHistory()
+        CctvStreamingService.restart(getApplication())
     }
 
     fun testCameraConnection() {
@@ -216,21 +257,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerManualSdCatchup(hoursBack: Int = 1) {
         AppLogger.enter(TAG, "triggerManualSdCatchup", "hoursBack=$hoursBack")
+        try {
+            CctvStreamingService.enqueueManualBackfill(getApplication(), hoursBack)
+            AppLogger.exit(TAG, "triggerManualSdCatchup", "Enqueued into GapLedger & StreamSupervisor")
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "triggerManualSdCatchup", t)
+        }
+    }
+
+    fun runCgiBacklogDiagnostic(hoursBack: Int = 1) {
+        AppLogger.enter(TAG, "runCgiBacklogDiagnostic", "hoursBack=$hoursBack")
         viewModelScope.launch {
+            _cgiChecking.value = true
             try {
                 val now = System.currentTimeMillis()
-                val start = now - (hoursBack * 3600 * 1000L)
-                AppLogger.i("ManualSync", "Triggering manual SD card catchup for past $hoursBack hour(s)...")
-
-                val ok = syncManager.syncMissingFootageTillNow(
-                    startTimeMs = start,
-                    endTimeMs = now,
-                    rtmpTargetFixed = settings.getFormattedFixedRtmp(),
-                    rtmpTargetRotatable = settings.getFormattedRotatableRtmp()
-                )
-                AppLogger.exit(TAG, "triggerManualSdCatchup", "ok=$ok")
+                val start = now - (hoursBack * 3600_000L)
+                val res = syncManager.runCgiBacklogCheck(start, now)
+                _cgiCheckMessage.value = res.getOrNull() ?: "Error: ${res.exceptionOrNull()?.message}"
             } catch (t: Throwable) {
-                AppLogger.exception(TAG, "triggerManualSdCatchup", t)
+                _cgiCheckMessage.value = "Error: ${t.localizedMessage}"
+            } finally {
+                _cgiChecking.value = false
             }
         }
     }

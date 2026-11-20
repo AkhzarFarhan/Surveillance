@@ -20,6 +20,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import com.imou.youtubestreamer.data.BackfillMode
+import com.imou.youtubestreamer.data.SettingsValidator
 import com.imou.youtubestreamer.update.AppUpdateManager
 import com.imou.youtubestreamer.update.UpdateStatus
 import com.imou.youtubestreamer.ui.CameraTestState
@@ -33,6 +35,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val testState by viewModel.cameraTestState.collectAsState()
     val updateStatus by viewModel.updateStatus.collectAsState()
     val manualCheckMsg by viewModel.manualCheckMessage.collectAsState()
+    val cgiChecking by viewModel.cgiChecking.collectAsState()
+    val cgiCheckMsg by viewModel.cgiCheckMessage.collectAsState()
 
     val (versionName, versionCode) = remember { AppUpdateManager.getCurrentVersionInfo(context) }
     var autoCheckUpdates by remember { mutableStateOf(settings.autoCheckUpdates) }
@@ -40,6 +44,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var cameraIp by remember { mutableStateOf(settings.cameraIp) }
     var rtspPort by remember { mutableStateOf(settings.rtspPort.toString()) }
     var httpPort by remember { mutableStateOf(settings.httpPort.toString()) }
+    var fixedChannel by remember { mutableStateOf(settings.fixedChannel.toString()) }
+    var rotatableChannel by remember { mutableStateOf(settings.rotatableChannel.toString()) }
     var username by remember { mutableStateOf(settings.username) }
     var safetyCode by remember { mutableStateOf(settings.safetyCode) }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -47,11 +53,19 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var catchupSpeed by remember { mutableStateOf(settings.catchupSpeed) }
     var silentAudio by remember { mutableStateOf(settings.silentAudioEnabled) }
     var autoBoot by remember { mutableStateOf(settings.autoStartOnBoot) }
+    var allowCellular by remember { mutableStateOf(settings.allowCellular) }
+    var backfillMode by remember { mutableStateOf(settings.backfillMode) }
+    var backfillRtmpFixed by remember { mutableStateOf(settings.backfillRtmpFixed) }
+    var backfillRtmpRotatable by remember { mutableStateOf(settings.backfillRtmpRotatable) }
+    var minGapBackfillSec by remember { mutableStateOf(settings.minGapToBackfillSec.toString()) }
+    var sdRetentionHours by remember { mutableStateOf(settings.sdRetentionHours.toString()) }
+    var rotationOverrideMin by remember { mutableStateOf(settings.rotationPeriodMinutesOverride.toString()) }
 
     var manualRtmpFixed by remember { mutableStateOf(settings.manualRtmpFixed) }
     var manualRtmpRotatable by remember { mutableStateOf(settings.manualRtmpRotatable) }
 
     var hasSavedFeedback by remember { mutableStateOf(false) }
+    var validationErrors by remember { mutableStateOf<List<String>>(emptyList()) }
 
     Column(
         modifier = Modifier
@@ -118,6 +132,31 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             focusedBorderColor = SurveillanceGreen,
                             unfocusedBorderColor = DarkBorder
                         ),
+                        singleLine = true
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = fixedChannel,
+                        onValueChange = {
+                            fixedChannel = it
+                            it.toIntOrNull()?.takeIf { c -> c >= 1 }?.let { c -> settings.fixedChannel = c }
+                        },
+                        label = { Text("Fixed Channel (_F)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = rotatableChannel,
+                        onValueChange = {
+                            rotatableChannel = it
+                            it.toIntOrNull()?.takeIf { c -> c >= 1 }?.let { c -> settings.rotatableChannel = c }
+                        },
+                        label = { Text("Rotatable Ch (_R)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true
                     )
                 }
@@ -305,6 +344,146 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         colors = SwitchDefaults.colors(checkedThumbColor = SurveillanceGreen)
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Allow Cellular Data Fallback",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Off (recommended): pauses YouTube upload when Wi-Fi loses WAN instead of burning mobile data.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = allowCellular,
+                        onCheckedChange = {
+                            allowCellular = it
+                            settings.allowCellular = it
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = SurveillanceGreen)
+                    )
+                }
+
+                HorizontalDivider(color = DarkBorder)
+
+                Text(
+                    text = "Backfill Strategy",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "Separate Key keeps live streaming 24/7 while replaying missed SD footage in parallel. Same Key pauses live during backfill.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BackfillMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = backfillMode == mode,
+                            onClick = {
+                                backfillMode = mode
+                                settings.backfillMode = mode
+                            },
+                            label = { Text(mode.label, fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = LiveCyan,
+                                selectedLabelColor = DarkBg
+                            )
+                        )
+                    }
+                }
+
+                if (backfillMode == BackfillMode.SEPARATE_KEY) {
+                    OutlinedTextField(
+                        value = backfillRtmpFixed,
+                        onValueChange = {
+                            backfillRtmpFixed = it
+                            settings.backfillRtmpFixed = it
+                        },
+                        label = { Text("Fixed Backfill Stream Key (Optional)") },
+                        placeholder = { Text("Separate key for parallel _F backfill") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = backfillRtmpRotatable,
+                        onValueChange = {
+                            backfillRtmpRotatable = it
+                            settings.backfillRtmpRotatable = it
+                        },
+                        label = { Text("Rotatable Backfill Stream Key (Optional)") },
+                        placeholder = { Text("Separate key for parallel _R backfill") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = minGapBackfillSec,
+                        onValueChange = {
+                            minGapBackfillSec = it
+                            it.toIntOrNull()?.let { s -> settings.minGapToBackfillSec = s }
+                        },
+                        label = { Text("Min Gap (sec)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = sdRetentionHours,
+                        onValueChange = {
+                            sdRetentionHours = it
+                            it.toIntOrNull()?.let { h -> settings.sdRetentionHours = h }
+                        },
+                        label = { Text("SD Retention (hrs)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.runCgiBacklogDiagnostic(hoursBack = 1) },
+                    enabled = !cgiChecking,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = if (cgiChecking) "Checking HTTP CGI..." else "Check Camera HTTP CGI Backlog (Optional)",
+                        fontSize = 12.sp,
+                        color = LiveCyan
+                    )
+                }
+
+                cgiCheckMsg?.let { msg ->
+                    Text(text = msg, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                }
+
+                HorizontalDivider(color = DarkBorder)
+
+                OutlinedTextField(
+                    value = rotationOverrideMin,
+                    onValueChange = {
+                        rotationOverrideMin = it
+                        it.toIntOrNull()?.let { m -> settings.rotationPeriodMinutesOverride = m }
+                    },
+                    label = { Text("Debug: Rotation Period Override (min, 0 = 8h)") },
+                    supportingText = { Text("Leave 0 for normal 8-hour parts. Set e.g. 10 to test rotation quickly.", fontSize = 11.sp, color = TextMuted) },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
             }
         }
 
@@ -470,15 +649,50 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
+        if (validationErrors.isNotEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF3A1216)),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DangerRed)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    validationErrors.forEach { err ->
+                        Text(text = "• $err", color = DangerRed, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
         Button(
-            onClick = { hasSavedFeedback = true },
+            onClick = {
+                val camVal = SettingsValidator.validateCameraSettings(
+                    cameraIp = cameraIp,
+                    rtspPort = rtspPort.toIntOrNull() ?: -1,
+                    httpPort = httpPort.toIntOrNull() ?: -1,
+                    fixedChannel = fixedChannel.toIntOrNull() ?: -1,
+                    rotatableChannel = rotatableChannel.toIntOrNull() ?: -1
+                )
+                val keyVal = SettingsValidator.validateStreamKeys(
+                    fixedLive = manualRtmpFixed,
+                    rotatableLive = manualRtmpRotatable,
+                    fixedBackfill = backfillRtmpFixed,
+                    rotatableBackfill = backfillRtmpRotatable,
+                    requireAtLeastOneLive = false
+                )
+                val errs = camVal.errors + keyVal.errors
+                validationErrors = errs
+                hasSavedFeedback = errs.isEmpty()
+            },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = SurveillanceGreen, contentColor = DarkBg),
             shape = RoundedCornerShape(12.dp)
         ) {
             Icon(AppIcons.Save, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text(if (hasSavedFeedback) "Settings Saved Successfully!" else "Save & Apply Settings", fontWeight = FontWeight.Bold)
+            Text(
+                if (hasSavedFeedback) "Settings Validated & Saved!" else "Save & Apply Settings",
+                fontWeight = FontWeight.Bold
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))

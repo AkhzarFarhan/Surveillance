@@ -16,8 +16,8 @@ android {
         val envCode = (System.getenv("VERSION_CODE") ?: project.findProperty("versionCode")?.toString())?.toIntOrNull()
         val envName = System.getenv("VERSION_NAME") ?: project.findProperty("versionName")?.toString()
 
-        versionCode = envCode ?: 15
-        versionName = envName ?: "1.0.14"
+        versionCode = envCode ?: 16
+        versionName = envName ?: "1.0.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -63,6 +63,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     packaging {
@@ -114,4 +118,12 @@ dependencies {
 
     // FFmpeg-Kit for Android (Native RTSP to RTMP streaming engine)
     implementation(libs.ffmpeg.kit.full)
+
+    // WorkManager (Process-level 15-min watchdog)
+    implementation(libs.work.runtime.ktx)
+
+    // JVM Unit Tests
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.org.json)
 }

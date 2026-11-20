@@ -56,7 +56,7 @@
                 android:value="24_7_cctv_rtsp_to_youtube_live_surveillance_pipeline" />
         </service>
 
-        <!-- Auto-Boot Receiver -->
+        <!-- Auto-Boot & Post-Update Receiver -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:enabled="true"
@@ -64,8 +64,15 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- AlarmManager Process Watchdog Receiver -->
+        <receiver
+            android:name=".watchdog.ServiceWatchdogReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <!-- FileProvider for In-App APK Updates -->
         <provider

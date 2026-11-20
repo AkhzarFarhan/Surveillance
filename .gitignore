@@ -11,3 +11,6 @@
 *.apk
 *.aab
 .kotlin/
+
+# CodeGraph index
+.codegraph/

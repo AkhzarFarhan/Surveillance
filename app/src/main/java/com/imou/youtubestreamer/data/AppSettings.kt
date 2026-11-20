@@ -86,6 +86,11 @@ class AppSettings(context: Context) {
         get() = prefs.getInt(KEY_ROTATABLE_CHANNEL, 1)
         set(value) = prefs.edit().putInt(KEY_ROTATABLE_CHANNEL, value).apply()
 
+    fun channelFor(lens: Lens): Int = when (lens) {
+        Lens.FIXED -> fixedChannel
+        Lens.ROTATABLE -> rotatableChannel
+    }
+
     var streamSubtype: Int
         get() = prefs.getInt(KEY_STREAM_SUBTYPE, 0) // 0 = Main high quality, 1 = Sub stream
         set(value) = prefs.edit().putInt(KEY_STREAM_SUBTYPE, value).apply()
@@ -114,22 +119,57 @@ class AppSettings(context: Context) {
         get() = prefs.getString(KEY_MANUAL_RTMP_ROTATABLE, "") ?: ""
         set(value) = prefs.edit().putString(KEY_MANUAL_RTMP_ROTATABLE, value.trim()).apply()
 
-    fun getFormattedFixedRtmp(): String = formatRtmpTarget(manualRtmpFixed)
+    var backfillRtmpFixed: String
+        get() = prefs.getString(KEY_BACKFILL_RTMP_FIXED, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_BACKFILL_RTMP_FIXED, value.trim()).apply()
 
-    fun getFormattedRotatableRtmp(): String = formatRtmpTarget(manualRtmpRotatable)
+    var backfillRtmpRotatable: String
+        get() = prefs.getString(KEY_BACKFILL_RTMP_ROTATABLE, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_BACKFILL_RTMP_ROTATABLE, value.trim()).apply()
 
-    private fun formatRtmpTarget(raw: String): String {
-        val target = raw.trim()
-        if (target.isBlank()) return ""
-        return when {
-            // YouTube's TLS ingest certificate is issued for *.rtmps.youtube.com, not a.rtmp.youtube.com
-            target.startsWith("rtmps://a.rtmp.youtube.com/", ignoreCase = true) ->
-                "rtmps://a.rtmps.youtube.com/" + target.substringAfter("rtmps://a.rtmp.youtube.com/")
-            target.startsWith("rtmp://", ignoreCase = true) || target.startsWith("rtmps://", ignoreCase = true) ->
-                target
-            else ->
-                "rtmps://a.rtmps.youtube.com/live2/$target"
+    var backfillMode: BackfillMode
+        get() {
+            val raw = prefs.getString(KEY_BACKFILL_MODE, BackfillMode.SEPARATE_KEY.name)
+            return try {
+                BackfillMode.valueOf(raw ?: BackfillMode.SEPARATE_KEY.name)
+            } catch (_: Exception) {
+                BackfillMode.SEPARATE_KEY
+            }
         }
+        set(value) = prefs.edit().putString(KEY_BACKFILL_MODE, value.name).apply()
+
+    var allowCellular: Boolean
+        get() = prefs.getBoolean(KEY_ALLOW_CELLULAR, false)
+        set(value) = prefs.edit().putBoolean(KEY_ALLOW_CELLULAR, value).apply()
+
+    var minGapToBackfillSec: Int
+        get() = prefs.getInt(KEY_MIN_GAP_BACKFILL_SEC, 60).coerceIn(10, 3600)
+        set(value) = prefs.edit().putInt(KEY_MIN_GAP_BACKFILL_SEC, value.coerceIn(10, 3600)).apply()
+
+    var sdRetentionHours: Int
+        get() = prefs.getInt(KEY_SD_RETENTION_HOURS, 72).coerceIn(1, 720)
+        set(value) = prefs.edit().putInt(KEY_SD_RETENTION_HOURS, value.coerceIn(1, 720)).apply()
+
+    var rotationPeriodMinutesOverride: Int
+        get() = prefs.getInt(KEY_ROTATION_OVERRIDE_MIN, 0).coerceIn(0, 720)
+        set(value) = prefs.edit().putInt(KEY_ROTATION_OVERRIDE_MIN, value.coerceIn(0, 720)).apply()
+
+    fun getFormattedFixedRtmp(): String = SettingsValidator.normalizeRtmpTarget(manualRtmpFixed)
+
+    fun getFormattedRotatableRtmp(): String = SettingsValidator.normalizeRtmpTarget(manualRtmpRotatable)
+
+    fun getFormattedBackfillFixedRtmp(): String = SettingsValidator.normalizeRtmpTarget(backfillRtmpFixed)
+
+    fun getFormattedBackfillRotatableRtmp(): String = SettingsValidator.normalizeRtmpTarget(backfillRtmpRotatable)
+
+    fun liveRtmpFor(lens: Lens): String = when (lens) {
+        Lens.FIXED -> getFormattedFixedRtmp()
+        Lens.ROTATABLE -> getFormattedRotatableRtmp()
+    }
+
+    fun backfillRtmpFor(lens: Lens): String = when (lens) {
+        Lens.FIXED -> getFormattedBackfillFixedRtmp()
+        Lens.ROTATABLE -> getFormattedBackfillRotatableRtmp()
     }
 
     var homeWifiSsid: String
@@ -167,6 +207,13 @@ class AppSettings(context: Context) {
         private const val KEY_USE_AUTO_BROADCAST = "pref_use_auto_broadcast"
         private const val KEY_MANUAL_RTMP_FIXED = "pref_manual_rtmp_fixed"
         private const val KEY_MANUAL_RTMP_ROTATABLE = "pref_manual_rtmp_rotatable"
+        private const val KEY_BACKFILL_RTMP_FIXED = "pref_backfill_rtmp_fixed"
+        private const val KEY_BACKFILL_RTMP_ROTATABLE = "pref_backfill_rtmp_rotatable"
+        private const val KEY_BACKFILL_MODE = "pref_backfill_mode"
+        private const val KEY_ALLOW_CELLULAR = "pref_allow_cellular"
+        private const val KEY_MIN_GAP_BACKFILL_SEC = "pref_min_gap_backfill_sec"
+        private const val KEY_SD_RETENTION_HOURS = "pref_sd_retention_hours"
+        private const val KEY_ROTATION_OVERRIDE_MIN = "pref_rotation_override_min"
         private const val KEY_HOME_WIFI_SSID = "pref_home_wifi_ssid"
         private const val KEY_AUTO_START_BOOT = "pref_auto_start_boot"
         private const val KEY_AUTO_CHECK_UPDATES = "pref_auto_check_updates"

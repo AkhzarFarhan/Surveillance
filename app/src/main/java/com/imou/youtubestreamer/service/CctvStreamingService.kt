@@ -1,13 +1,13 @@
 package com.imou.youtubestreamer.service
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -16,44 +16,58 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import com.imou.youtubestreamer.MainActivity
-import com.imou.youtubestreamer.data.*
+import com.imou.youtubestreamer.data.AppLogger
+import com.imou.youtubestreamer.data.AppSettings
+import com.imou.youtubestreamer.data.PipelineStatus
+import com.imou.youtubestreamer.data.SystemClockImpl
+import com.imou.youtubestreamer.data.SystemStreamState
 import com.imou.youtubestreamer.engine.DualStreamOrchestrator
-import com.imou.youtubestreamer.scheduler.SessionRotationScheduler
-import com.imou.youtubestreamer.sync.DahuaSdCardSyncManager
-import kotlinx.coroutines.*
+import com.imou.youtubestreamer.net.ConnectivityMonitor
+import com.imou.youtubestreamer.resume.GapLedger
+import com.imou.youtubestreamer.resume.Heartbeat
+import com.imou.youtubestreamer.supervisor.StreamSupervisor
+import com.imou.youtubestreamer.supervisor.SupervisorEvent
+import com.imou.youtubestreamer.supervisor.SupervisorStore
+import com.imou.youtubestreamer.sync.OnvifCameraClient
+import com.imou.youtubestreamer.watchdog.ServiceWatchdogScheduler
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 
 /**
- * 24/7 Persistent Android Foreground Service.
- * Manages the entire surveillance streaming pipeline:
- * - Doze-mode bypass (WakeLock & WifiLock)
- * - Network outage detection & SD-card backlog catch-up
- * - 8-hour session rotation cycler with private YouTube live broadcasts
- * - Dual FFmpeg stream workers for Fixed and Rotatable camera lenses
+ * Thin lifecycle host for the 24/7 surveillance foreground service (`specialUse`).
+ *
+ * All streaming, rotation, connectivity hysteresis, and resumable SD-card backfill logic
+ * runs inside [StreamSupervisor] (single-threaded actor).
  */
 class CctvStreamingService : LifecycleService() {
 
     private lateinit var settings: AppSettings
-    private lateinit var syncManager: DahuaSdCardSyncManager
-    private lateinit var rotationScheduler: SessionRotationScheduler
-    private lateinit var streamOrchestrator: DualStreamOrchestrator
+    private lateinit var store: SupervisorStore
+    private lateinit var heartbeat: Heartbeat
+    private lateinit var ledger: GapLedger
+    private lateinit var connectivity: ConnectivityMonitor
+    private lateinit var supervisor: StreamSupervisor
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
-    private var connectivityManager: ConnectivityManager? = null
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var thermalListener: Any? = null
 
-    private var currentFixedRtmp: String = ""
-    private var currentRotatableRtmp: String = ""
-
-    private var isWifiConnected = false
-    private var wifiDisconnectTimestamp: Long = 0L
+    private val clock = SystemClockImpl
 
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
-        AppLogger.exception("CctvService", "serviceScope.CoroutineExceptionHandler", throwable)
-        _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
+        AppLogger.exception(TAG, "serviceScope.CoroutineExceptionHandler", throwable)
+        if (::supervisor.isInitialized) {
+            supervisor.send(SupervisorEvent.Tick(clock.nowMs(), clock.elapsedMs()))
+        }
     }
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob() + exceptionHandler)
 
@@ -63,6 +77,10 @@ class CctvStreamingService : LifecycleService() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "ACTION_START_STREAMING"
         const val ACTION_STOP = "ACTION_STOP_STREAMING"
+        const val ACTION_RESTART = "ACTION_RESTART_STREAMING"
+        const val ACTION_MANUAL_BACKFILL = "ACTION_MANUAL_BACKFILL"
+        const val EXTRA_EXPLICIT_START = "EXTRA_EXPLICIT_START"
+        const val EXTRA_HOURS_BACK = "EXTRA_HOURS_BACK"
 
         private val _systemState = MutableStateFlow(SystemStreamState())
         val systemState: StateFlow<SystemStreamState> = _systemState.asStateFlow()
@@ -71,24 +89,27 @@ class CctvStreamingService : LifecycleService() {
         var isRunning: Boolean = false
             private set
 
-        fun start(context: Context) {
-            AppLogger.enter(TAG, "Companion.start", "isRunning=$isRunning, SDK=${Build.VERSION.SDK_INT}")
+        fun start(context: Context, explicit: Boolean = true) {
+            AppLogger.enter(TAG, "Companion.start", "explicit=$explicit, isRunning=$isRunning, SDK=${Build.VERSION.SDK_INT}")
             try {
                 val appCtx = context.applicationContext
+                if (explicit) {
+                    SupervisorStore(appCtx).desiredRunning = true
+                    ServiceWatchdogScheduler.scheduleAll(appCtx)
+                }
                 val intent = Intent(appCtx, CctvStreamingService::class.java).apply {
                     action = ACTION_START
+                    putExtra(EXTRA_EXPLICIT_START, explicit)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    AppLogger.step(TAG, "Companion.start", "Calling startForegroundService(ACTION_START)")
                     appCtx.startForegroundService(intent)
                 } else {
-                    AppLogger.step(TAG, "Companion.start", "Calling startService(ACTION_START)")
                     appCtx.startService(intent)
                 }
                 AppLogger.exit(TAG, "Companion.start", "Service start requested")
             } catch (t: Throwable) {
                 AppLogger.exception(TAG, "Companion.start", t)
-                _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
+                ServiceWatchdogScheduler.scheduleAlarm(context.applicationContext, 30_000L)
             }
         }
 
@@ -96,16 +117,19 @@ class CctvStreamingService : LifecycleService() {
             AppLogger.enter(TAG, "Companion.stop", "isRunning=$isRunning")
             try {
                 val appCtx = context.applicationContext
+                SupervisorStore(appCtx).desiredRunning = false
+                ServiceWatchdogScheduler.cancelAll(appCtx)
+
                 if (isRunning) {
                     val intent = Intent(appCtx, CctvStreamingService::class.java).apply {
                         action = ACTION_STOP
                     }
                     appCtx.startService(intent)
-                    AppLogger.exit(TAG, "Companion.stop", "Sent ACTION_STOP to running service")
+                    AppLogger.exit(TAG, "Companion.stop", "Sent ACTION_STOP")
                 } else {
                     appCtx.stopService(Intent(appCtx, CctvStreamingService::class.java))
                     _systemState.value = _systemState.value.copy(status = PipelineStatus.IDLE)
-                    AppLogger.exit(TAG, "Companion.stop", "Service already not running; called stopService")
+                    AppLogger.exit(TAG, "Companion.stop", "Service already stopped")
                 }
             } catch (t: Throwable) {
                 AppLogger.exception(TAG, "Companion.stop", t)
@@ -117,38 +141,196 @@ class CctvStreamingService : LifecycleService() {
                 _systemState.value = _systemState.value.copy(status = PipelineStatus.IDLE)
             }
         }
+
+        fun restart(context: Context) {
+            AppLogger.enter(TAG, "Companion.restart", "isRunning=$isRunning")
+            val appCtx = context.applicationContext
+            SupervisorStore(appCtx).desiredRunning = true
+            ServiceWatchdogScheduler.scheduleAll(appCtx)
+            if (isRunning) {
+                val intent = Intent(appCtx, CctvStreamingService::class.java).apply {
+                    action = ACTION_RESTART
+                }
+                appCtx.startService(intent)
+            } else {
+                start(appCtx, explicit = true)
+            }
+        }
+
+        fun enqueueManualBackfill(context: Context, hoursBack: Int = 1) {
+            AppLogger.enter(TAG, "Companion.enqueueManualBackfill", "hoursBack=$hoursBack, isRunning=$isRunning")
+            val appCtx = context.applicationContext
+            val ledger = GapLedger(File(appCtx.filesDir, "gap_ledger.json"), SystemClockImpl)
+            val settings = AppSettings(appCtx)
+            val now = SystemClockImpl.nowMs()
+            val start = now - (hoursBack.coerceIn(1, 72) * 3600_000L)
+            if (settings.getFormattedFixedRtmp().isNotBlank()) {
+                ledger.recordOutage(com.imou.youtubestreamer.data.Lens.FIXED, start, now, minGapSec = 10)
+            }
+            if (settings.getFormattedRotatableRtmp().isNotBlank()) {
+                ledger.recordOutage(com.imou.youtubestreamer.data.Lens.ROTATABLE, start, now, minGapSec = 10)
+            }
+
+            if (isRunning) {
+                val intent = Intent(appCtx, CctvStreamingService::class.java).apply {
+                    action = ACTION_MANUAL_BACKFILL
+                    putExtra(EXTRA_HOURS_BACK, hoursBack)
+                }
+                appCtx.startService(intent)
+            } else {
+                start(appCtx, explicit = true)
+            }
+        }
     }
 
     override fun onCreate() {
         AppLogger.enter(TAG, "onCreate")
         super.onCreate()
         try {
-            settings = AppSettings(applicationContext)
-            syncManager = DahuaSdCardSyncManager(applicationContext, settings)
-            rotationScheduler = SessionRotationScheduler(applicationContext)
-            streamOrchestrator = DualStreamOrchestrator(applicationContext, settings)
-            AppLogger.step(TAG, "onCreate", "Sub-components initialized (AppSettings, SyncManager, RotationScheduler, DualOrchestrator)")
-
             createNotificationChannel()
             promoteToForeground(
-                "Initializing Surveillance Streamer...",
-                "Preparing camera & YouTube connection"
+                "Initializing Surveillance Pipeline...",
+                "Starting monitor, gap ledger & supervisor"
             )
-            acquirePowerLocks()
-            registerNetworkMonitoring()
-            observeOrchestratorStates()
+
+            settings = AppSettings(applicationContext)
+            store = SupervisorStore(applicationContext)
+            heartbeat = Heartbeat(store, clock)
+            ledger = GapLedger(File(filesDir, "gap_ledger.json"), clock)
+            val probe = OnvifCameraClient(settings)
+
+            connectivity = ConnectivityMonitor(
+                context = applicationContext,
+                settings = settings,
+                clock = clock,
+                scope = serviceScope,
+                onLinkChanged = { newState, netChanged ->
+                    if (netChanged) refreshWifiLock()
+                    if (::supervisor.isInitialized) {
+                        supervisor.send(SupervisorEvent.LinkChanged(newState, netChanged))
+                    }
+                }
+            )
+
+            supervisor = StreamSupervisor(
+                scope = serviceScope,
+                clock = clock,
+                settings = settings,
+                store = store,
+                heartbeat = heartbeat,
+                ledger = ledger,
+                probe = probe,
+                connectivity = connectivity,
+                systemStateFlow = _systemState,
+                onNotificationUpdate = { title, text -> updateNotification(title, text) },
+                onWakeLockRefreshNeeded = { ensurePowerLocksHeld() },
+                onAllStopped = {
+                    DualStreamOrchestrator.logRunningFfmpegSessions("onAllStopped")
+                }
+            )
+
+            ensurePowerLocksHeld()
+            registerThermalMonitor()
+            connectivity.start()
+            supervisor.startActor()
 
             isRunning = true
-            AppLogger.i(TAG, "CctvStreamingService created and running in foreground.")
-            AppLogger.exit(TAG, "onCreate", "isRunning=$isRunning")
+            AppLogger.i(TAG, "CctvStreamingService initialized cleanly.")
+            AppLogger.exit(TAG, "onCreate", "isRunning=true")
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "onCreate", t)
-            _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
+            isRunning = false
+            val retryDelay = if (::store.isInitialized && store.isCrashLoopActive(clock.nowMs())) {
+                ServiceWatchdogScheduler.CRASH_LOOP_BACKOFF_MS
+            } else {
+                30_000L
+            }
+            if (::store.isInitialized && store.desiredRunning) {
+                ServiceWatchdogScheduler.scheduleAlarm(applicationContext, retryDelay)
+            }
+            stopSelf()
         }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: "<NULL_ACTION>"
+        AppLogger.enter(TAG, "onStartCommand", "action=$action, flags=$flags, startId=$startId, isRunning=$isRunning")
+        super.onStartCommand(intent, flags, startId)
+
+        if (!::supervisor.isInitialized) {
+            AppLogger.unexpected(TAG, "onStartCommand", "Supervisor not initialized; aborting startId=$startId")
+            return START_NOT_STICKY
+        }
+
+        try {
+            when (intent?.action) {
+                ACTION_STOP -> {
+                    AppLogger.i(TAG, "Stopping pipeline per ACTION_STOP...")
+                    store.desiredRunning = false
+                    ServiceWatchdogScheduler.cancelAll(applicationContext)
+                    isRunning = false
+                    runBlocking {
+                        withTimeoutOrNull(6_000L) {
+                            supervisor.send(SupervisorEvent.UserStop("ACTION_STOP"))
+                            supervisor.shutdown("ACTION_STOP")
+                        }
+                    }
+                    _systemState.value = _systemState.value.copy(status = PipelineStatus.IDLE)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    AppLogger.exit(TAG, "onStartCommand", "START_NOT_STICKY (stopped)")
+                    return START_NOT_STICKY
+                }
+
+                ACTION_RESTART -> {
+                    promoteToForeground("Restarting Pipeline...", "Recycling camera & YouTube workers")
+                    store.desiredRunning = true
+                    ServiceWatchdogScheduler.scheduleAll(applicationContext)
+                    supervisor.send(SupervisorEvent.RestartPipeline("notification_or_user_restart"))
+                }
+
+                ACTION_MANUAL_BACKFILL -> {
+                    promoteToForeground("Surveillance Pipeline Active", "Scheduling SD card backfill...")
+                    store.desiredRunning = true
+                    ServiceWatchdogScheduler.scheduleAll(applicationContext)
+                    supervisor.send(SupervisorEvent.Tick(clock.nowMs(), clock.elapsedMs()))
+                }
+
+                ACTION_START, null -> {
+                    val explicit = intent?.getBooleanExtra(EXTRA_EXPLICIT_START, intent.action == ACTION_START) ?: false
+                    if (explicit) {
+                        store.desiredRunning = true
+                        ServiceWatchdogScheduler.scheduleAll(applicationContext)
+                    } else if (!store.desiredRunning) {
+                        AppLogger.i(TAG, "Sticky/watchdog start ignored because desiredRunning=false")
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf(startId)
+                        return START_NOT_STICKY
+                    }
+
+                    // Idempotent re-promote + UserStart (if workers already match desired state, reconcile is a no-op)
+                    promoteToForeground(
+                        "Surveillance Pipeline Active",
+                        "Monitoring camera RTSP -> YouTube RTMPS"
+                    )
+                    ServiceWatchdogScheduler.scheduleAll(applicationContext)
+                    supervisor.send(SupervisorEvent.UserStart(explicit = explicit))
+                }
+
+                else -> {
+                    AppLogger.unexpected(TAG, "onStartCommand", "Unrecognized intent action", action)
+                }
+            }
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "onStartCommand", t, "action=$action")
+            supervisor.send(SupervisorEvent.Tick(clock.nowMs(), clock.elapsedMs()))
+        }
+
+        AppLogger.exit(TAG, "onStartCommand", "START_STICKY")
+        return START_STICKY
+    }
+
     private fun promoteToForeground(title: String, text: String) {
-        AppLogger.enter(TAG, "promoteToForeground", "title='$title', text='$text', SDK=${Build.VERSION.SDK_INT}")
         try {
             val notification = buildNotification(title, text)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -157,10 +339,8 @@ class CctvStreamingService : LifecycleService() {
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 )
-                AppLogger.exit(TAG, "promoteToForeground", "Started foreground with FOREGROUND_SERVICE_TYPE_SPECIAL_USE")
             } else {
                 startForeground(NOTIFICATION_ID, notification)
-                AppLogger.exit(TAG, "promoteToForeground", "Started foreground (2-arg)")
             }
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "promoteToForeground", t, "Fallback to 2-arg startForeground")
@@ -173,325 +353,153 @@ class CctvStreamingService : LifecycleService() {
     }
 
     override fun onTimeout(startId: Int) {
-        AppLogger.unexpected(TAG, "onTimeout(startId=$startId)", "OS signaled foreground service timeout; stopping gracefully and scheduling restart")
+        AppLogger.unexpected(TAG, "onTimeout(startId=$startId)", "OS signaled foreground service timeout; cycling safely")
         handleFgsTimeout(startId)
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        AppLogger.unexpected(TAG, "onTimeout(startId=$startId, fgsType=$fgsType)", "OS signaled foreground service timeout; stopping gracefully and scheduling restart")
+        AppLogger.unexpected(TAG, "onTimeout(startId=$startId, fgsType=$fgsType)", "OS signaled foreground service timeout; cycling safely")
         handleFgsTimeout(startId)
     }
 
     private fun handleFgsTimeout(startId: Int) {
         try {
-            val shouldRestart = isRunning
+            val shouldRestart = ::store.isInitialized && store.desiredRunning
             val appCtx = applicationContext
-            if (::rotationScheduler.isInitialized) rotationScheduler.stop()
-            if (::streamOrchestrator.isInitialized) streamOrchestrator.stopLiveStreamsGracefully()
             isRunning = false
+            runBlocking {
+                withTimeoutOrNull(4_000L) {
+                    if (::supervisor.isInitialized) supervisor.shutdown("onTimeout")
+                }
+            }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             if (shouldRestart) {
+                ServiceWatchdogScheduler.scheduleAlarm(appCtx, 5_000L)
                 Handler(Looper.getMainLooper()).postDelayed({
                     AppLogger.i(TAG, "Re-launching CctvStreamingService after OS timeout cycle...")
-                    start(appCtx)
-                }, 2000L)
+                    start(appCtx, explicit = false)
+                }, 2_000L)
             }
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "handleFgsTimeout", t)
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: "<NULL_ACTION>"
-        AppLogger.enter(TAG, "onStartCommand", "action=$action, flags=$flags, startId=$startId, isRunning=$isRunning")
-        super.onStartCommand(intent, flags, startId)
-
-        try {
-            when (intent?.action) {
-                ACTION_START, null -> {
-                    promoteToForeground(
-                        "Surveillance Pipeline Active",
-                        "Starting camera RTSP -> YouTube RTMPS engine..."
-                    )
-                    startPipeline()
-                }
-                ACTION_STOP -> {
-                    stopPipeline()
-                }
-                else -> {
-                    AppLogger.unexpected(TAG, "onStartCommand", "Unrecognized intent action", action)
-                }
-            }
-        } catch (t: Throwable) {
-            AppLogger.exception(TAG, "onStartCommand", t, "action=$action")
-            _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
-        }
-
-        AppLogger.exit(TAG, "onStartCommand", "START_STICKY")
-        return START_STICKY
-    }
-
-    private fun startPipeline() {
-        AppLogger.enter(TAG, "startPipeline")
-        serviceScope.launch {
-            AppLogger.enter(TAG, "startPipeline.coroutine")
-            try {
-                _systemState.value = _systemState.value.copy(status = PipelineStatus.INITIALIZING)
-                updateNotification("Initializing...", "Validating YouTube Stream Key & Camera Settings...")
-
-                val fixedRtmp = settings.getFormattedFixedRtmp()
-                val rotatableRtmp = settings.getFormattedRotatableRtmp()
-
-                AppLogger.step(
-                    TAG,
-                    "startPipeline",
-                    "Camera=${settings.cameraIp}:${settings.rtspPort} (HTTP:${settings.httpPort}), user='${settings.username}', pass=${AppLogger.maskSecret(settings.safetyCode)}, fixedRtmp=${AppLogger.maskSecret(fixedRtmp)}, rotatableRtmp=${AppLogger.maskSecret(rotatableRtmp)}"
-                )
-
-                if (fixedRtmp.isBlank() && rotatableRtmp.isBlank()) {
-                    AppLogger.unexpected(TAG, "startPipeline", "Both Fixed and Rotatable RTMP keys are blank!")
-                    _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
-                    updateNotification("Stream Key Missing", "Enter your YouTube Stream Key in the app.")
-                    AppLogger.w(TAG, "Cannot start streaming: YouTube Stream Key is not configured.")
-                    AppLogger.exit(TAG, "startPipeline.coroutine", "ABORTED_NO_STREAM_KEY")
-                    return@launch
-                }
-
-                if (settings.safetyCode.isBlank()) {
-                    AppLogger.unexpected(TAG, "startPipeline", "Camera password/safetyCode is blank! RTSP authentication will likely fail.")
-                }
-
-                _systemState.value = _systemState.value.copy(status = PipelineStatus.STREAMING)
-                AppLogger.i(TAG, "YouTube Stream Key validated. Starting 24/7 session rotation loop...")
-
-                rotationScheduler.startRotationLoop(
-                    onNewSessionStarting = { partIndex, dateStr ->
-                        handleNewSession(partIndex, dateStr)
-                    },
-                    onSessionEnding = {
-                        handleSessionEnding()
-                    }
-                )
-                AppLogger.exit(TAG, "startPipeline.coroutine", "Rotation loop launched")
-            } catch (t: Throwable) {
-                AppLogger.exception(TAG, "startPipeline.coroutine", t)
-                _systemState.value = _systemState.value.copy(status = PipelineStatus.ERROR)
-                updateNotification("Pipeline Error", t.localizedMessage ?: "Unexpected error starting stream")
-            }
-        }
-        AppLogger.exit(TAG, "startPipeline", "Dispatched to serviceScope")
-    }
-
-    private suspend fun handleNewSession(partIndex: Int, dateStr: String) {
-        AppLogger.enter(TAG, "handleNewSession", "partIndex=$partIndex, dateStr='$dateStr'")
-        try {
-            val titleFixed = "$dateStr Part ${partIndex} of 3_F"
-            val titleRotatable = "$dateStr Part ${partIndex} of 3_R"
-
-            _systemState.value = _systemState.value.copy(
-                status = PipelineStatus.STREAMING,
-                activePartIndex = partIndex,
-                activeDateStr = dateStr
-            )
-
-            updateNotification(
-                "Streaming 8h Block (Part $partIndex of 3)",
-                "Active: $titleFixed & _R"
-            )
-
-            currentFixedRtmp = settings.getFormattedFixedRtmp()
-            currentRotatableRtmp = settings.getFormattedRotatableRtmp()
-
-            AppLogger.i(
-                TAG,
-                "Starting 8h session $partIndex/3 via YouTube Stream Key: Fixed=${if (currentFixedRtmp.isNotBlank()) "Configured" else "Disabled"}, Rotatable=${if (currentRotatableRtmp.isNotBlank()) "Configured" else "Disabled"}"
-            )
-
-            streamOrchestrator.startDualStreaming(
-                fixedTargetRtmp = currentFixedRtmp,
-                rotatableTargetRtmp = currentRotatableRtmp,
-                fixedTitle = titleFixed,
-                rotatableTitle = titleRotatable,
-                fixedWatchUrl = "",
-                rotatableWatchUrl = ""
-            )
-            AppLogger.exit(TAG, "handleNewSession", "Dual streaming triggered for Part $partIndex")
-        } catch (t: Throwable) {
-            AppLogger.exception(TAG, "handleNewSession", t, "partIndex=$partIndex, dateStr=$dateStr")
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        AppLogger.step(TAG, "onTaskRemoved", "App swiped from recents; desiredRunning=${::store.isInitialized && store.desiredRunning}")
+        super.onTaskRemoved(rootIntent)
+        if (::store.isInitialized && store.desiredRunning) {
+            ServiceWatchdogScheduler.scheduleAlarm(applicationContext, 10_000L)
         }
     }
 
-    private suspend fun handleSessionEnding() {
-        AppLogger.enter(TAG, "handleSessionEnding")
-        try {
-            _systemState.value = _systemState.value.copy(status = PipelineStatus.ROTATING)
-            updateNotification("Rotating Session", "Finalizing 8-hour archive. 15s break...")
-            AppLogger.i(TAG, "8-Hour session complete. Disconnecting RTMP for 15s graceful break so YouTube finalizes the VOD replay...")
-
-            streamOrchestrator.stopLiveStreamsGracefully()
-            AppLogger.exit(TAG, "handleSessionEnding", "Streams stopped gracefully")
-        } catch (t: Throwable) {
-            AppLogger.exception(TAG, "handleSessionEnding", t)
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL && ::supervisor.isInitialized) {
+            AppLogger.w(TAG, "onTrimMemory(level=$level) CRITICAL — requesting substream fallback for transcoding lenses")
+            supervisor.send(SupervisorEvent.MemoryOrThermalPressure(forceSubstream = true, source = "onTrimMemory($level)"))
         }
     }
 
-    private fun registerNetworkMonitoring() {
-        AppLogger.enter(TAG, "registerNetworkMonitoring")
+    private fun registerThermalMonitor() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         try {
-            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            if (connectivityManager == null) {
-                AppLogger.unexpected(TAG, "registerNetworkMonitoring", "ConnectivityManager is null!")
-                return
-            }
-
-            val request = NetworkRequest.Builder()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                .build()
-
-            networkCallback = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    AppLogger.enter(TAG, "NetworkCallback.onAvailable", "network=$network, wasWifiConnected=$isWifiConnected, disconnectTs=$wifiDisconnectTimestamp")
-                    try {
-                        val wasDisconnected = !isWifiConnected && wifiDisconnectTimestamp > 0L
-                        isWifiConnected = true
-
-                        _systemState.value = _systemState.value.copy(
-                            isWifiConnected = true,
-                            status = if (wasDisconnected) PipelineStatus.CATCHING_UP else _systemState.value.status
-                        )
-
-                        if (wasDisconnected) {
-                            val reconnectTimestamp = System.currentTimeMillis()
-                            val offlineDurationMs = reconnectTimestamp - wifiDisconnectTimestamp
-                            wifiDisconnectTimestamp = 0L
-
-                            serviceScope.launch {
-                                try {
-                                    val minutes = offlineDurationMs / 60000
-                                    AppLogger.i(TAG, "Wi-Fi restored! Outage was $minutes minutes. Commencing SD card catch-up...")
-                                    updateNotification(
-                                        "Wi-Fi Restored: Syncing SD Card",
-                                        "Catching up $minutes mins of offline footage at ${settings.catchupSpeed}x speed..."
-                                    )
-
-                                    syncManager.syncMissingFootageTillNow(
-                                        startTimeMs = reconnectTimestamp - offlineDurationMs,
-                                        endTimeMs = reconnectTimestamp,
-                                        rtmpTargetFixed = currentFixedRtmp,
-                                        rtmpTargetRotatable = currentRotatableRtmp
-                                    )
-
-                                    AppLogger.i(TAG, "Catch-up completed. Resuming regular live stream.")
-                                    val currentPart = _systemState.value.activePartIndex
-                                    val currentDate = _systemState.value.activeDateStr
-                                    handleNewSession(currentPart, currentDate)
-                                } catch (t: Throwable) {
-                                    AppLogger.exception(TAG, "NetworkCallback.onAvailable.catchup", t)
-                                }
-                            }
-                        } else {
-                            AppLogger.i(TAG, "Wi-Fi network connected ($network).")
-                        }
-                        AppLogger.exit(TAG, "NetworkCallback.onAvailable", "wasDisconnected=$wasDisconnected")
-                    } catch (t: Throwable) {
-                        AppLogger.exception(TAG, "NetworkCallback.onAvailable", t)
-                    }
-                }
-
-                override fun onLost(network: Network) {
-                    AppLogger.enter(TAG, "NetworkCallback.onLost", "network=$network")
-                    try {
-                        isWifiConnected = false
-                        wifiDisconnectTimestamp = System.currentTimeMillis()
-                        settings.lastOutageTimestamp = wifiDisconnectTimestamp
-
-                        _systemState.value = _systemState.value.copy(
-                            isWifiConnected = false,
-                            status = PipelineStatus.OUTAGE_RECORDING
-                        )
-
-                        AppLogger.w(TAG, "Home Wi-Fi lost! Pausing live streams. CCTV is recording to SD card.")
-                        updateNotification(
-                            "Home Wi-Fi Disconnected",
-                            "CCTV recording safely to MicroSD card. Pausing stream..."
-                        )
-                        streamOrchestrator.pauseLiveStreams()
-                        AppLogger.exit(TAG, "NetworkCallback.onLost", "Paused streams at ts=$wifiDisconnectTimestamp")
-                    } catch (t: Throwable) {
-                        AppLogger.exception(TAG, "NetworkCallback.onLost", t)
-                    }
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            val listener = PowerManager.OnThermalStatusChangedListener { status ->
+                if (!::supervisor.isInitialized) return@OnThermalStatusChangedListener
+                if (status >= PowerManager.THERMAL_STATUS_SEVERE) {
+                    AppLogger.w(TAG, "Thermal status $status >= SEVERE — enabling copy-mode substream")
+                    supervisor.send(SupervisorEvent.MemoryOrThermalPressure(forceSubstream = true, source = "thermal($status)"))
+                } else if (status <= PowerManager.THERMAL_STATUS_MODERATE) {
+                    supervisor.send(SupervisorEvent.MemoryOrThermalPressure(forceSubstream = false, source = "thermal($status)"))
                 }
             }
-
-            connectivityManager?.registerNetworkCallback(request, networkCallback!!)
-            AppLogger.exit(TAG, "registerNetworkMonitoring", "Registered WIFI NetworkCallback")
+            pm.addThermalStatusListener(listener)
+            thermalListener = listener
         } catch (t: Throwable) {
-            AppLogger.exception(TAG, "registerNetworkMonitoring", t)
+            AppLogger.exception(TAG, "registerThermalMonitor", t)
         }
     }
 
-    private fun observeOrchestratorStates() {
-        AppLogger.enter(TAG, "observeOrchestratorStates")
-        serviceScope.launch {
-            streamOrchestrator.fixedState.collect { fixed ->
-                _systemState.value = _systemState.value.copy(fixedLens = fixed)
-            }
+    private fun unregisterThermalMonitor() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val listener = thermalListener as? PowerManager.OnThermalStatusChangedListener ?: return
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.removeThermalStatusListener(listener)
+        } catch (_: Throwable) {
         }
-        serviceScope.launch {
-            streamOrchestrator.rotatableState.collect { rot ->
-                _systemState.value = _systemState.value.copy(rotatableLens = rot)
-            }
-        }
-        serviceScope.launch {
-            rotationScheduler.remainingTimeMs.collect { remMs ->
-                _systemState.value = _systemState.value.copy(nextRotationRemainingMs = remMs)
-            }
-        }
-        serviceScope.launch {
-            syncManager.catchupState.collect { catchup ->
-                _systemState.value = _systemState.value.copy(catchup = catchup)
-            }
-        }
-        AppLogger.exit(TAG, "observeOrchestratorStates", "State collectors active")
+        thermalListener = null
     }
 
-    private fun acquirePowerLocks() {
-        AppLogger.enter(TAG, "acquirePowerLocks")
+    @Synchronized
+    private fun ensurePowerLocksHeld() {
         try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
-            wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Surveillance::WakeLock")?.apply {
-                setReferenceCounted(false)
-                acquire()
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Surveillance::WakeLock")?.apply {
+                    setReferenceCounted(false)
+                }
             }
-            AppLogger.step(TAG, "acquirePowerLocks", "WakeLock acquired=${wakeLock?.isHeld}")
+            wakeLock?.let { wl ->
+                if (!wl.isHeld) {
+                    wl.acquire()
+                    AppLogger.step(TAG, "ensurePowerLocksHeld", "WakeLock (re)acquired=true")
+                }
+            }
         } catch (t: Throwable) {
-            AppLogger.exception(TAG, "acquirePowerLocks:WakeLock", t)
+            AppLogger.exception(TAG, "ensurePowerLocksHeld:WakeLock", t)
         }
 
         try {
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            @Suppress("DEPRECATION")
-            val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-            } else {
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            if (wifiLock == null) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                @Suppress("DEPRECATION")
+                val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wm?.createWifiLock(lockMode, "Surveillance::WifiLock")?.apply {
+                    setReferenceCounted(false)
+                }
             }
-            wifiLock = wifiManager?.createWifiLock(lockMode, "Surveillance::WifiLock")?.apply {
-                setReferenceCounted(false)
-                acquire()
+            wifiLock?.let { wfl ->
+                if (!wfl.isHeld) {
+                    wfl.acquire()
+                    AppLogger.step(TAG, "ensurePowerLocksHeld", "WifiLock (re)acquired=true")
+                }
             }
-            AppLogger.step(TAG, "acquirePowerLocks", "WifiLock acquired=${wifiLock?.isHeld}")
         } catch (t: Throwable) {
-            AppLogger.exception(TAG, "acquirePowerLocks:WifiLock", t)
+            AppLogger.exception(TAG, "ensurePowerLocksHeld:WifiLock", t)
         }
-        AppLogger.exit(TAG, "acquirePowerLocks", "Done")
+    }
+
+    @Synchronized
+    private fun refreshWifiLock() {
+        try {
+            wifiLock?.let {
+                if (it.isHeld) it.release()
+                it.acquire()
+            }
+        } catch (t: Throwable) {
+            AppLogger.exception(TAG, "refreshWifiLock", t)
+        }
     }
 
     private fun buildNotification(title: String, text: String): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val restartIntent = Intent(this, CctvStreamingService::class.java).apply {
+            action = ACTION_RESTART
+        }
+        val restartPendingIntent = PendingIntent.getService(
+            this, 2, restartIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -506,26 +514,26 @@ class CctvStreamingService : LifecycleService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(android.R.drawable.presence_video_online)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
+            .addAction(android.R.drawable.ic_menu_rotate, "Restart Pipeline", restartPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Streaming", stopPendingIntent)
             .build()
     }
 
     private fun updateNotification(title: String, text: String) {
         try {
-            val notification = buildNotification(title, text)
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            manager?.notify(NOTIFICATION_ID, notification)
+            manager?.notify(NOTIFICATION_ID, buildNotification(title, text))
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "updateNotification", t, "title=$title")
         }
     }
 
     private fun createNotificationChannel() {
-        AppLogger.enter(TAG, "createNotificationChannel")
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
@@ -538,25 +546,8 @@ class CctvStreamingService : LifecycleService() {
                 val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 manager?.createNotificationChannel(channel)
             }
-            AppLogger.exit(TAG, "createNotificationChannel", "Channel created")
         } catch (t: Throwable) {
             AppLogger.exception(TAG, "createNotificationChannel", t)
-        }
-    }
-
-    private fun stopPipeline() {
-        AppLogger.enter(TAG, "stopPipeline")
-        try {
-            AppLogger.i(TAG, "Stopping streaming pipeline...")
-            if (::rotationScheduler.isInitialized) rotationScheduler.stop()
-            if (::streamOrchestrator.isInitialized) streamOrchestrator.stopLiveStreamsGracefully()
-            _systemState.value = _systemState.value.copy(status = PipelineStatus.IDLE)
-            isRunning = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            AppLogger.exit(TAG, "stopPipeline", "Stopped & removed foreground service")
-        } catch (t: Throwable) {
-            AppLogger.exception(TAG, "stopPipeline", t)
         }
     }
 
@@ -565,24 +556,21 @@ class CctvStreamingService : LifecycleService() {
         super.onDestroy()
         try {
             isRunning = false
-            _systemState.value = _systemState.value.copy(status = PipelineStatus.IDLE)
-            if (::rotationScheduler.isInitialized) rotationScheduler.stop()
-            if (::streamOrchestrator.isInitialized) streamOrchestrator.stopLiveStreamsGracefully()
+            unregisterThermalMonitor()
+            if (::connectivity.isInitialized) connectivity.stop()
+            runBlocking {
+                withTimeoutOrNull(4_000L) {
+                    if (::supervisor.isInitialized) supervisor.shutdown("onDestroy")
+                }
+            }
             serviceScope.cancel()
             try {
-                networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
-            } catch (t: Throwable) {
-                AppLogger.exception(TAG, "onDestroy:unregisterNetworkCallback", t)
-            }
-            try {
                 wakeLock?.let { if (it.isHeld) it.release() }
-            } catch (t: Throwable) {
-                AppLogger.exception(TAG, "onDestroy:wakeLock", t)
+            } catch (_: Throwable) {
             }
             try {
                 wifiLock?.let { if (it.isHeld) it.release() }
-            } catch (t: Throwable) {
-                AppLogger.exception(TAG, "onDestroy:wifiLock", t)
+            } catch (_: Throwable) {
             }
             AppLogger.i(TAG, "CctvStreamingService destroyed.")
             AppLogger.exit(TAG, "onDestroy", "Cleanup complete")

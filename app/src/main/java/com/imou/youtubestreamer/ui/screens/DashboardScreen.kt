@@ -29,8 +29,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.imou.youtubestreamer.data.LensMode
 import com.imou.youtubestreamer.data.LensStreamState
 import com.imou.youtubestreamer.data.PipelineStatus
+import com.imou.youtubestreamer.data.SettingsValidator
 import com.imou.youtubestreamer.data.SystemStreamState
 import com.imou.youtubestreamer.ui.MainViewModel
 import com.imou.youtubestreamer.ui.theme.*
@@ -40,12 +45,24 @@ fun DashboardScreen(
     viewModel: MainViewModel
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val systemState by viewModel.systemState.collectAsState()
     val settings = viewModel.settings
 
-    val isIgnoringBatteryOptimizations = remember {
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    fun checkBatteryExempt(): Boolean {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        return powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+    }
+
+    var isIgnoringBatteryOptimizations by remember { mutableStateOf(checkBatteryExempt()) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isIgnoringBatteryOptimizations = checkBatteryExempt()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     var showStreamKeyDialog by remember { mutableStateOf(false) }
@@ -98,8 +115,77 @@ fun DashboardScreen(
             }
         }
 
+        // Crash Loop Guard Banner
+        if (systemState.crashLoopDetected) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF3A1216)),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DangerRed)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.ErrorOutline, contentDescription = null, tint = DangerRed)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Crash Loop Detected (${systemState.crashCountRecent} crashes / 10m)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = DangerRed,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Auto-restart backed off to 5 minutes to protect battery/stability.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                    TextButton(onClick = { viewModel.clearCrashLoopWarning() }) {
+                        Text("Reset", color = LiveCyan, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Supervisor Configuration Warning Banner (e.g. duplicate stream keys)
+        systemState.lastSupervisorWarning?.let { warning ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF36210C)),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DangerRed)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.ErrorOutline, contentDescription = null, tint = DangerRed)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = warning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
         // Master Pipeline Status Card
         PipelineStatusCard(systemState = systemState)
+
+        // System Health & Self-Heal Summary Card
+        SystemHealthCard(
+            systemState = systemState,
+            allowCellular = settings.allowCellular,
+            isIgnoringBatteryOptimizations = isIgnoringBatteryOptimizations,
+            onRequestBatteryExemption = {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                }
+                context.startActivity(intent)
+            }
+        )
 
         // YouTube Stream Key Ingestion Card (Zero Google Login Required)
         YouTubeStreamKeyCard(
@@ -124,6 +210,14 @@ fun DashboardScreen(
         if (showStreamKeyDialog) {
             var tempFixed by remember { mutableStateOf(fixedKey) }
             var tempRotatable by remember { mutableStateOf(rotatableKey) }
+            val keyValidation = remember(tempFixed, tempRotatable) {
+                SettingsValidator.validateStreamKeys(
+                    fixedLive = tempFixed,
+                    rotatableLive = tempRotatable,
+                    fixedBackfill = settings.backfillRtmpFixed,
+                    rotatableBackfill = settings.backfillRtmpRotatable
+                )
+            }
 
             AlertDialog(
                 onDismissRequest = { showStreamKeyDialog = false },
@@ -137,7 +231,7 @@ fun DashboardScreen(
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
-                            text = "Copy your Stream Key from YouTube Studio Live Control Room. No Google sign-in is needed — YouTube ingests video directly via RTMPS.",
+                            text = "Copy two distinct Stream Keys from YouTube Studio -> Manage -> Schedule Stream. No Google sign-in is needed.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -180,6 +274,15 @@ fun DashboardScreen(
                             }
                         )
 
+                        if (!keyValidation.isValid) {
+                            Text(
+                                text = keyValidation.errors.first(),
+                                color = DangerRed,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
                         TextButton(
                             onClick = {
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://studio.youtube.com/channel/live")).apply {
@@ -197,6 +300,7 @@ fun DashboardScreen(
                 },
                 confirmButton = {
                     Button(
+                        enabled = keyValidation.isValid,
                         onClick = {
                             viewModel.saveStreamKeys(tempFixed, tempRotatable)
                             fixedKey = tempFixed.trim()
@@ -439,6 +543,120 @@ fun YouTubeStreamKeyCard(
 }
 
 @Composable
+fun SystemHealthCard(
+    systemState: SystemStreamState,
+    allowCellular: Boolean,
+    isIgnoringBatteryOptimizations: Boolean,
+    onRequestBatteryExemption: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder)),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SYSTEM HEALTH & SELF-HEAL",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    letterSpacing = 1.sp
+                )
+                val hbText = if (systemState.lastHeartbeatWallMs <= 0L) {
+                    "Heartbeat: —"
+                } else {
+                    val ageSec = ((System.currentTimeMillis() - systemState.lastHeartbeatWallMs) / 1000L).coerceAtLeast(0L)
+                    if (ageSec < 12L) "Heartbeat: live (${ageSec}s ago)" else "Heartbeat: ${ageSec}s ago"
+                }
+                Text(
+                    text = hbText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                HealthPill(
+                    label = if (systemState.lanUp) "LAN: Camera OK" else "LAN: Offline",
+                    ok = systemState.lanUp,
+                    modifier = Modifier.weight(1f)
+                )
+                val wanLabel = when {
+                    systemState.isCellularOnly && !allowCellular -> "WAN: Cellular Blocked"
+                    systemState.wanUp -> "WAN: YouTube OK"
+                    else -> "WAN: Offline"
+                }
+                HealthPill(
+                    label = wanLabel,
+                    ok = systemState.wanUp,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Pending SD Backfill: _F ${systemState.pendingFixedGapMinutes}m • _R ${systemState.pendingRotatableGapMinutes}m",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (systemState.pendingFixedGapMinutes + systemState.pendingRotatableGapMinutes > 0L) LiveCyan else TextSecondary
+                )
+
+                if (isIgnoringBatteryOptimizations) {
+                    Text(
+                        text = "Battery: Exempt",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SurveillanceGreen,
+                        fontWeight = FontWeight.Bold
+                    )
+                } else {
+                    TextButton(onClick = onRequestBatteryExemption, contentPadding = PaddingValues(0.dp)) {
+                        Text("Fix Battery Limit", fontSize = 11.sp, color = WarningAmber, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HealthPill(label: String, ok: Boolean, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (ok) Color(0xFF163327) else Color(0xFF381B1B))
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (ok) SurveillanceGreen else DangerRed)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (ok) SurveillanceGreen else DangerRed,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
 fun PipelineStatusCard(systemState: SystemStreamState) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -452,12 +670,12 @@ fun PipelineStatusCard(systemState: SystemStreamState) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     val statusColor = when (systemState.status) {
                         PipelineStatus.STREAMING -> SurveillanceGreen
                         PipelineStatus.CATCHING_UP -> LiveCyan
                         PipelineStatus.OUTAGE_RECORDING, PipelineStatus.ROTATING -> WarningAmber
-                        PipelineStatus.ERROR -> DangerRed
+                        PipelineStatus.ERROR, PipelineStatus.CAMERA_OFFLINE -> DangerRed
                         else -> TextMuted
                     }
                     Box(
@@ -475,25 +693,31 @@ fun PipelineStatusCard(systemState: SystemStreamState) {
                     )
                 }
 
-                // Wi-Fi Status Pill
+                // Network Link Status Pill
+                val online = systemState.lanUp && systemState.wanUp
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (systemState.isWifiConnected) Color(0xFF1B382B) else Color(0xFF381B1B))
+                        .background(if (online) Color(0xFF1B382B) else Color(0xFF381B1B))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Icon(
-                        if (systemState.isWifiConnected) AppIcons.Wifi else AppIcons.WifiOff,
+                        if (online) AppIcons.Wifi else AppIcons.WifiOff,
                         contentDescription = null,
-                        tint = if (systemState.isWifiConnected) SurveillanceGreen else DangerRed,
+                        tint = if (online) SurveillanceGreen else DangerRed,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (systemState.isWifiConnected) "Home Wi-Fi" else "Offline",
+                        text = when {
+                            online -> "LAN + WAN"
+                            systemState.lanUp -> "WAN Lost"
+                            systemState.isWifiConnected -> "LAN Lost"
+                            else -> "Offline"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (systemState.isWifiConnected) SurveillanceGreen else DangerRed
+                        color = if (online) SurveillanceGreen else DangerRed
                     )
                 }
             }
@@ -592,16 +816,33 @@ fun LensStatusCard(lensState: LensStreamState) {
                     )
                 }
 
-                // Channel Badge
-                Text(
-                    text = "CH ${lensState.channel}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = LiveCyan,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DarkSurfaceVariant)
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val modeColor = when (lensState.mode) {
+                        LensMode.LIVE -> SurveillanceGreen
+                        LensMode.LIVE_AND_BACKFILL, LensMode.BACKFILL -> LiveCyan
+                        LensMode.WAITING -> WarningAmber
+                        LensMode.OFF -> TextMuted
+                    }
+                    Text(
+                        text = lensState.mode.label.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = modeColor,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DarkSurfaceVariant)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                    Text(
+                        text = "CH ${lensState.channel}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LiveCyan,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DarkSurfaceVariant)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -630,10 +871,20 @@ fun LensStatusCard(lensState: LensStreamState) {
                 MetricColumn("UPTIME", "%02d:%02d".format(hours, mins))
             }
 
+            if (lensState.isBackfilling || lensState.pendingGapMinutes > 0L) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "SD Backfill: ${lensState.pendingGapMinutes}m queued" +
+                        if (lensState.backfillStatus.isNotBlank()) " • ${lensState.backfillStatus}" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = LiveCyan
+                )
+            }
+
             if (lensState.lastError != null) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Warning: ${lensState.lastError}",
+                    text = "Status: ${lensState.lastError}",
                     style = MaterialTheme.typography.labelSmall,
                     color = DangerRed
                 )
